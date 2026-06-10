@@ -18,7 +18,7 @@ public:
   MemoryGraph(const nlohmann::json &metadata = {});
 
   // Node operations
-  void addNote(const Node &node);
+  void addNode(const Node &node);
   void removeNode(const std::string &nodeId);
   const Node &getNode(const std::string &nodeId) const;
   bool hasNode(const std::string &nodeId) const;
