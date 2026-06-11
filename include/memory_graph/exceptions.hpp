@@ -25,6 +25,16 @@ public:
 };
 
 /**
+ * @class NodeNotFoundError
+ * @brief Throw when an edge is not found in the graph.
+ */
+class EdgeNotFoundError : public std::runtime_error {
+public:
+  explicit EdgeNotFoundError(const std::string &edgeId)
+      : std::runtime_error("Edge with ID '" + edgeId + "' not found.") {}
+};
+
+/**
  * @class InvalidConnectionError
  * @brief Thrown when an edge references a non-existent node.
  */
