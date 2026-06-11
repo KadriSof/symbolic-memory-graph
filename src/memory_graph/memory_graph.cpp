@@ -297,4 +297,58 @@ void MemoryGraph::updateMetadata(const std::string &key,
   metadata_[key] = value;
 }
 
+bool MemoryGraph::hasEdge(const std::string &edgeId) const {
+  return edges_.find(edgeId) != edges_.end();
+}
+
+void MemoryGraph::removeEdge(const std::string &edgeId) {
+  if (!hasEdge(edgeId)) {
+    throw EdgeNotFoundError(edgeId);
+  }
+
+  const Edge &edge = edges_.at(edgeId);
+  if (edge.getType() == EdgeType::SYMMETRIC) {
+    const auto &conn_set =
+        std::get<SymmetricConnections>(edge.getConnections());
+    auto it = conn_set.begin();
+    std::string node1 = *it;
+    std::string node2 = *(++it);
+    nodes_[node1].removeConnection(node2);
+    nodes_[node2].removeConnection(node1);
+  } else {
+    const auto &conn_pair =
+        std::get<AsymmetricConnections>(edge.getConnections());
+    nodes_[conn_pair.first].removeConnection(conn_pair.second);
+  }
+
+  edges_.erase(edgeId);
+}
+
+const Edge &MemoryGraph::getEdge(const std::string &edgeId) const {
+  if (!hasEdge(edgeId)) {
+    throw EdgeNotFoundError(edgeId);
+  }
+  return edges_.at(edgeId);
+}
+
+std::vector<Edge> MemoryGraph::getEdges() const {
+  std::vector<Edge> result;
+  for (const auto &[id, edge] : edges_) {
+    result.push_back(edge);
+  }
+  return result;
+}
+
+std::vector<Node> MemoryGraph::getNeighbors(const std::string &nodeId) const {
+  if (!hasNode(nodeId)) {
+    throw NodeNotFoundError(nodeId);
+  }
+
+  std::vector<Node> neighbors;
+  for (const auto &neighborId : nodes_.at(nodeId).getConnections()) {
+    neighbors.push_back(nodes_.at(neighborId));
+  }
+  return neighbors;
+}
+
 } // namespace memory_graph
