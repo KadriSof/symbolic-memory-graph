@@ -351,4 +351,128 @@ std::vector<Node> MemoryGraph::getNeighbors(const std::string &nodeId) const {
   return neighbors;
 }
 
+nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
+                                  float minWeight) const {
+  if (!hasNode(nodeId)) {
+    throw NodeNotFoundError(nodeId);
+  }
+
+  nlohmann::json result;
+  std::unordered_set<std::string> visited;
+  std::queue<std::pair<std::string, int>> queue; // (node_id, depth)
+
+  queue.push({nodeId, 0});
+  result["depth_0"] = nlohmann::json::array({nodeId});
+
+  while (!queue.empty()) {
+    auto [currentId, depth] = queue.front();
+    queue.pop();
+
+    if (depth >= maxDepth) {
+      continue;
+    }
+
+    if (visited.find(currentId) != visited.end()) {
+      continue;
+    }
+
+    visited.insert(currentId);
+
+    // Explore neighbors
+    for (const auto &neighborId : nodes_.at(currentId).getConnections()) {
+      // Find the edge between currentId and neighborId
+      float edgeWeight = 1.0f; // Default weight
+      try {
+        std::string edgeId = findEdgeId(currentId, neighborId);
+        edgeWeight = edges_.at(edgeId).getWeight();
+      } catch (const EdgeNotFoundError &) {
+        // Won't probably catch this..
+      }
+
+      if (edgeWeight >= minWeight) {
+        std::string depthKey = "depth_" + std::to_string(depth + 1);
+        if (result.find(depthKey) == result.end()) {
+          result[depthKey] = nlohmann::json::array();
+        }
+        result[depthKey].push_back(neighborId);
+        queue.push({neighborId, depth + 1});
+      }
+    }
+  }
+
+  return result;
+}
+
+std::string MemoryGraph::findEdgeId(const std::string &nodeId1,
+                                    const std::string &nodeId2) const {
+  for (const auto &[edgeId, edge] : edges_) {
+    if (std::holds_alternative<SymmetricConnections>(edge.getConnections())) {
+      const auto &conn_set =
+          std::get<SymmetricConnections>(edge.getConnections());
+      if (conn_set.find(nodeId1) != conn_set.end() &&
+          conn_set.find(nodeId2) != conn_set.end()) {
+        return edgeId;
+      }
+    } else {
+      const auto &conn_pair =
+          std::get<AsymmetricConnections>(edge.getConnections());
+      if ((conn_pair.first == nodeId1 && conn_pair.second == nodeId2) ||
+          (conn_pair.first == nodeId2 && conn_pair.second == nodeId2)) {
+        return edgeId;
+      }
+    }
+  }
+
+  throw EdgeNotFoundError("No edge found between '" + nodeId1 + "' and '" +
+                          nodeId2 + "'.");
+}
+
+nlohmann::json MemoryGraph::toJson() const {
+  nlohmann::json graphJson;
+  graphJson["metadata"] = metadata_;
+
+  // Serialize nodes
+  nlohmann::json nodesJson;
+  for (const auto &[nodeId, node] : nodes_) {
+    nodesJson[nodeId] = node.toJson();
+  }
+  graphJson["nodes"] = nodesJson;
+
+  // Serialize edges
+  nlohmann::json edgesJson;
+  for (const auto &[edgeId, edge] : edges_) {
+    edgesJson[edgeId] = edge.toJson();
+  }
+  graphJson["edges"] = edgesJson;
+
+  return graphJson;
+}
+
+MemoryGraph MemoryGraph::fromJson(const nlohmann::json &graphJson) {
+  MemoryGraph graph(graphJson.value("metadata", nlohmann::json::object()));
+
+  // Deserialize nodes
+  for (const auto &[nodeId, nodesJson] : graphJson["nodes"].items()) {
+    graph.addNode(Node::fromJson(nodesJson));
+  }
+
+  // Deserialize edges
+  for (const auto &[edgeId, edgeJson] : graphJson["edges"].items()) {
+    graph.addEdge(Edge::fromJson(edgeJson));
+  }
+
+  return graph;
+}
+
+const nlohmann::json &MemoryGraph::getMetadata() const { return metadata_; }
+
+void MemoryGraph::setMetadata(const nlohmann::json &metadata) {
+  metadata_ = metadata;
+}
+
+void MemoryGraph::updateMetadata(const std::string &key,
+                                 const nlohmann::json &value) {
+  metadata_[key] = value;
+}
+
 } // namespace memory_graph
