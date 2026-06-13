@@ -313,12 +313,12 @@ void MemoryGraph::removeEdge(const std::string &edgeId) {
     auto it = conn_set.begin();
     std::string node1 = *it;
     std::string node2 = *(++it);
-    nodes_[node1].removeConnection(node2);
-    nodes_[node2].removeConnection(node1);
+    nodes_.at(node1).removeConnection(node2);
+    nodes_.at(node2).removeConnection(node1);
   } else {
     const auto &conn_pair =
         std::get<AsymmetricConnections>(edge.getConnections());
-    nodes_[conn_pair.first].removeConnection(conn_pair.second);
+    nodes_.at(conn_pair.first).removeConnection(conn_pair.second);
   }
 
   edges_.erase(edgeId);
