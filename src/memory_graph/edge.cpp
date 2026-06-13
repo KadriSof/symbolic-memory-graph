@@ -1,6 +1,6 @@
 #include "memory_graph/edge.hpp"
 #include "nlohmann/json.hpp"
-#include <stdexcept>
+#include <vector>
 
 namespace memory_graph {
 
@@ -42,7 +42,8 @@ nlohmann::json Edge::toJson() const {
   nlohmann::json edgeJson;
   edgeJson["id"] = id_;
   edgeJson["label"] = label_;
-  edgeJson["type"] = (type_ == EdgeType::SYMMETRIC) ? "SYMMETRIC" : "SYMMETRIC";
+  edgeJson["type"] =
+      (type_ == EdgeType::SYMMETRIC) ? "SYMMETRIC" : "ASYMMETRIC";
   edgeJson["weight"] = weight_;
   edgeJson["metadata"] = metadata_;
 
@@ -80,7 +81,7 @@ Edge Edge::fromJson(const nlohmann::json &edgeJson) {
   } else {
     std::string source = edgeJson["connections"]["source"];
     std::string target = edgeJson["connections"]["target"];
-    connections = SymmetricConnections(source, target);
+    connections = AsymmetricConnections(source, target);
   }
 
   return Edge(edgeJson.at("id").get<std::string>(),

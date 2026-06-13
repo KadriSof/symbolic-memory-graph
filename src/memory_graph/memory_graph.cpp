@@ -17,7 +17,7 @@ void MemoryGraph::addNode(const Node &node) {
     throw DuplicateIdError("Node with ID '" + node.getId() +
                            "' already exists.");
   }
-  nodes_[node.getId()] = node;
+  nodes_.emplace(node.getId(), node);
 }
 
 bool MemoryGraph::hasNode(const std::string &nodeId) const {
@@ -116,7 +116,7 @@ void MemoryGraph::addEdge(const Edge &edge) {
     nodes_.at(conn_pair.first).addConnection(conn_pair.second);
   }
 
-  edges_[edge.getId()] = edge;
+  edges_.emplace(edge.getId(), edge);
 }
 
 bool MemoryGraph::hasEdge(const std::string &edgeId) const {
@@ -135,12 +135,12 @@ void MemoryGraph::removeEdge(const std::string &edgeId) {
     auto it = conn_set.begin();
     std::string node1 = *it;
     std::string node2 = *(++it);
-    nodes_[node1].removeConnection(node2);
-    nodes_[node2].removeConnection(node1);
+    nodes_.at(node1).removeConnection(node2);
+    nodes_.at(node2).removeConnection(node1);
   } else {
     const auto &conn_pair =
         std::get<AsymmetricConnections>(edge.getConnections());
-    nodes_[conn_pair.first].removeConnection(conn_pair.second);
+    nodes_.at(conn_pair.first).removeConnection(conn_pair.second);
   }
 
   edges_.erase(edgeId);
