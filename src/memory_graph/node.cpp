@@ -43,8 +43,17 @@ nlohmann::json Node::toJson() const {
 }
 
 Node Node::fromJson(const nlohmann::json &nodeJson) {
-  return Node(nodeJson.at("id").get<std::string>(),
-              nodeJson.at("label").get<std::string>(),
-              nodeJson.value("metadata", nlohmann::json::object()));
+  Node node(nodeJson.at("id").get<std::string>(),
+            nodeJson.at("label").get<std::string>(),
+            nodeJson.value("metadata", nlohmann::json::object()));
+
+  // Parse and add connections
+  if (nodeJson.contains("connections") && nodeJson["connections"].is_array()) {
+    for (const auto &connectionId : nodeJson["connections"]) {
+      node.addConnection(connectionId.get<std::string>());
+    }
+  }
+
+  return node;
 }
 } // namespace memory_graph
