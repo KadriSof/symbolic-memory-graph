@@ -17,7 +17,7 @@ target_include_directories(memory_graph
 )
 
 # Link dependencies
-target_link_libraries(memory_graph PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(memory_graph PUBLIC nlohmann_json::nlohmann_json)
 
 # Install headers
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/memory_graph
