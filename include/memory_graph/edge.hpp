@@ -1,6 +1,5 @@
 #pragma once
 
-#include "memory_graph/exceptions.hpp"
 #include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_set>

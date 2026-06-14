@@ -25,7 +25,7 @@ public:
 };
 
 /**
- * @class NodeNotFoundError
+ * @class EdgeNotFoundError
  * @brief Throw when an edge is not found in the graph.
  */
 class EdgeNotFoundError : public std::runtime_error {
