@@ -10,7 +10,7 @@
 namespace memory_graph {
 
 MemoryGraph::MemoryGraph(const nlohmann::json &metadata)
-    : metadata_(metadata) {}
+    : metadata_(metadata.is_object() ? metadata : nlohmann::json::object()) {}
 
 void MemoryGraph::addNode(const Node &node) {
   if (nodes_.find(node.getId()) != nodes_.end()) {
