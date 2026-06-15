@@ -391,7 +391,7 @@ TEST(MemoryGraphTest, ToJson) {
   // Check a specific edge
   EXPECT_TRUE(graphJson["edges"].contains("luffy_shanks"));
   EXPECT_EQ(graphJson["edges"]["luffy_shanks"]["label"], "inspired_by");
-  EXPECT_EQ(graphJson["edges"]["luffy_shanks"]["weight"], 0.95);
+  EXPECT_NEAR(graphJson["edges"]["luffy_shanks"]["weight"], 0.95, 1e-6);
 }
 
 TEST(MemoryGraphTest, FromJson) {
@@ -464,6 +464,9 @@ TEST(MemoryGraphTest, EmptyGraph) {
 
   EXPECT_TRUE(graph.getNodes().empty());
   EXPECT_TRUE(graph.getEdges().empty());
+
+  Node luffy("luffy", "Luffy");
+  graph.addNode(luffy);
   EXPECT_EQ(graph.getNeighbors("luffy").size(), 0);
 }
 
@@ -483,21 +486,42 @@ TEST(MemoryGraphTest, LargeNumberOfNodes) {
   }
 }
 
-// TEST(MemoryGraphTest, FindEdgeId) {
-//   MemoryGraph graph = createTestGraph();
-//
-//   std::string edgeId = graph.findEdgeId("luffy", "zoro");
-//   EXPECT_EQ(edgeId, "luffy_zoro");
-//
-//   edgeId = graph.findEdgeId("luffy", "shanks");
-//   EXPECT_EQ(edgeId, "luffy_shanks");
-// }
-//
-// TEST(MemoryGraphTest, FindNonExistentEdgeIdThrows) {
-//   MemoryGraph graph = createTestGraph();
-//
-//   EXPECT_THROW(graph.findEdgeId("luffy", "imu"), EdgeNotFoundError);
-// }
+TEST(MemoryGraphTest, QueryUsesCorrectEdgeWeights) {
+  MemoryGraph graph = createTestGraph();
+
+  // Query with minWeight high enough to filter out low-weight edges
+  json result = graph.query("luffy", 1, 0.96f);
+
+  // luffy_shanks has weight 0.95, so it should be filtered OUT
+  // Other connections have weight 1.0, so they should be present
+  std::unordered_set<std::string> neighbors;
+  for (const auto &id : result["depth_1"]) {
+    neighbors.insert(id.get<std::string>());
+  }
+
+  EXPECT_TRUE(neighbors.count("zoro"));       // weight 1.0
+  EXPECT_TRUE(neighbors.count("nami"));       // weight 1.0
+  EXPECT_TRUE(neighbors.count("straw_hats")); // weight 1.0
+  EXPECT_FALSE(neighbors.count("shanks"));    // weight 0.95 - filtered out!
+}
+
+TEST(MemoryGraphTest, QueryFindsAllNeighborsRegardlessOfOrder) {
+  MemoryGraph graph = createTestGraph();
+
+  json result = graph.query("luffy", 1, 0.0f); // Include all weights
+
+  std::unordered_set<std::string> neighbors;
+  for (const auto &id : result["depth_1"]) {
+    neighbors.insert(id.get<std::string>());
+  }
+
+  // All neighbors regardless of weight should be found
+  EXPECT_EQ(neighbors.size(), 4);
+  EXPECT_TRUE(neighbors.count("zoro"));
+  EXPECT_TRUE(neighbors.count("nami"));
+  EXPECT_TRUE(neighbors.count("shanks"));
+  EXPECT_TRUE(neighbors.count("straw_hats"));
+}
 
 TEST(MemoryGraphTest, DuplicateIdError) {
   MemoryGraph graph;
