@@ -21,7 +21,7 @@ public:
 class NodeNotFoundError : public std::runtime_error {
 public:
   explicit NodeNotFoundError(const std::string &nodeId)
-      : std::runtime_error("Node with ID '" + nodeId + "'not found.") {}
+      : std::runtime_error("Node with ID '" + nodeId + "' not found.") {}
 };
 
 /**
