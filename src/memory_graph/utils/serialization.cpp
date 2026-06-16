@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+
 #include <vector>
 #include <zlib.h>
 // #include <lz4.h>  // TODO: Implement the LZ4 later
@@ -126,6 +127,7 @@ bool isCompressed(const std::vector<uint8_t> &data) {
 
   return false;
 }
+
 MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   // 1. Decompress if needed
   std::vector<uint8_t> decompressedData;
@@ -184,6 +186,7 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
                      (static_cast<uint32_t>(rawData[offset + 1]) << 8) |
                      (static_cast<uint32_t>(rawData[offset + 2]) << 16) |
                      (static_cast<uint32_t>(rawData[offset + 3]) << 24);
+
     offset += 4;
     return value;
   };
@@ -240,7 +243,6 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
         "[serialization:fromBinary] Failed to parse JSON: " +
         std::string(e.what()));
   }
-
   // 5. Reconstruct graph
   return MemoryGraph::fromJson(graphJson);
 }
