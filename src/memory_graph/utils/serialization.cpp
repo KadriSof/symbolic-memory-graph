@@ -130,11 +130,13 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
 
   auto readU32 = [&rawData, &rawSize](size_t &offset) -> uint32_t {
     if (offset + 4 > rawSize) {
-      throw std::runtime_error("Invalid binary data: unexpected EOF");
+      throw std::runtime_error(
+          "[serialization:fromBinary] Invalid binary data: unexpected EOF");
     }
-    uint32_t value = rawData[offset] |
-                     (rawData[offset + 1] << 8 | (rawData[offset + 2] << 16 |
-                                                  (rawData[offset + 3] << 24)));
+    uint32_t value = static_cast<uint32_t>(rawData[offset]) |
+                     (static_cast<uint32_t>(rawData[offset + 1]) << 8) |
+                     (static_cast<uint32_t>(rawData[offset + 2]) << 16) |
+                     (static_cast<uint32_t>(rawData[offset + 3]) << 24);
     offset += 4;
     return value;
   };
