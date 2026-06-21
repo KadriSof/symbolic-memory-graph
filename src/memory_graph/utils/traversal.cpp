@@ -157,7 +157,7 @@ std::vector<std::vector<std::string>> findAllPaths(const MemoryGraph &graph,
   std::vector<std::string> currentPath;
   std::unordered_set<std::string> visited;
 
-  std::fucntion<void(const std::string &, int)> explore =
+  std::function<void(const std::string &, int)> explore =
       [&](const std::string &currentId, int depth) {
         currentPath.push_back(currentId);
         visited.insert(currentId);
@@ -183,5 +183,94 @@ std::vector<std::vector<std::string>> findAllPaths(const MemoryGraph &graph,
 }
 
 // Graph Properties
+bool hasCycle(const MemoryGraph &graph) {
+  std::unordered_set<std::string> visited;
+  std::unordered_set<std::string> recursionStack;
+
+  std::function<bool(const std::string &)> dfsCycle =
+      [&](const std::string &nodeId) -> bool {
+    visited.insert(nodeId);
+    recursionStack.insert(nodeId);
+
+    for (const auto &neighborId : graph.getNode(nodeId).getConnections()) {
+      if (visited.find(neighborId) == visited.end()) {
+        if (dfsCycle(neighborId)) {
+          return true;
+        }
+      } else if (recursionStack.find(neighborId) != recursionStack.end()) {
+        return true; // found a back edge
+      }
+    }
+
+    recursionStack.erase(nodeId);
+    return false;
+  };
+
+  // Check all nodes
+  for (const auto &node : graph.getNodes()) {
+    if (visited.find(node.getId()) == visited.end()) {
+      if (dfsCycle(node.getId())) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+std::vector<std::string> topologicalSort(const MemoryGraph &graph) {
+  if (hasCycle(graph)) {
+    throw std::runtime_error(
+        "[utils:traversal] Graph has a cycle - topological sort impossible");
+  }
+
+  std::unordered_map<std::string, int> inDegree;
+  std::queue<std::string> queue;
+  std::vector<std::string> result;
+
+  // Initialize in-degree for all nodes
+  for (const auto &node : graph.getNodes()) {
+    inDegree[node.getId()] = 0;
+  }
+
+  // Count incoming edges
+  for (const auto &node : graph.getNodes()) {
+    for (const auto &neighborId : node.getConnections()) {
+      inDegree[neighborId]++;
+    }
+  }
+
+  // Find nodes with 0 in-degree
+  for (const auto &[id, count] : inDegree) {
+    if (count == 0) {
+      queue.push(id);
+    }
+  }
+
+  // Process queue
+  while (!queue.empty()) {
+    std::string nodeId = queue.front();
+    queue.pop();
+    result.push_back(nodeId);
+
+    for (const auto &neighborId : graph.getNode(nodeId).getConnections()) {
+      inDegree[neighborId]--;
+      if (inDegree[neighborId] == 0) {
+        queue.push(neighborId);
+      }
+    }
+  }
+
+  return result;
+}
+
+bool isConnected(const MemoryGraph &graph, const std::string &start) {
+  if (!graph.hasNode(start)) {
+    throw NodeNotFoundError(start);
+  }
+
+  auto visited = bfs(graph, start);
+  return visited.size() == graph.getNodes().size();
+}
 
 } // namespace memory_graph::utils
