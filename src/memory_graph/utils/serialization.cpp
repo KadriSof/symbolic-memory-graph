@@ -291,6 +291,12 @@ nlohmann::json computeDelta(const MemoryGraph &before,
       removedNodes.push_back(id);
     }
   }
+  // Find removed nodes
+  for (const auto &id : beforeNodes) {
+    if (afterNodes.find(id) == afterNodes.end()) {
+      removedNodes.push_back(id);
+    }
+  }
 
   // Check for modified nodes
   nlohmann::json modifiedNodes = nlohmann::json::object();
