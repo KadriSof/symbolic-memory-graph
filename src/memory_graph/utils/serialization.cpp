@@ -291,6 +291,12 @@ nlohmann::json computeDelta(const MemoryGraph &before,
       removedNodes.push_back(id);
     }
   }
+  // Find removed nodes
+  for (const auto &id : beforeNodes) {
+    if (afterNodes.find(id) == afterNodes.end()) {
+      removedNodes.push_back(id);
+    }
+  }
 
   // Check for modified nodes
   nlohmann::json modifiedNodes = nlohmann::json::object();
@@ -322,6 +328,19 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   std::vector<std::string> removedEdges;
   for (const auto &id : beforeEdges) {
     removedEdges.push_back(id);
+  }
+
+  // Check for modified edges
+  nlohmann::json modifiedEdges = nlohmann::json::object();
+  for (const auto &id : afterEdges) {
+    if (beforeEdges.find(id) != beforeEdges.end()) {
+      const Edge &beforeEdge = before.getEdge(id);
+      const Edge &afterEdge = after.getEdge(id);
+
+      if (beforeEdge.toJson() != afterEdge.toJson()) {
+        modifiedEdges[id] = afterEdge.toJson();
+      }
+    }
   }
 
   // Check for modified edges
