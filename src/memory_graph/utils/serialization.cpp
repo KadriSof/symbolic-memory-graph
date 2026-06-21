@@ -1,5 +1,7 @@
 #include "memory_graph/utils/serialization.hpp"
+#include "memory_graph/edge.hpp"
 #include "memory_graph/memory_graph.hpp"
+#include "memory_graph/node.hpp"
 #include "nlohmann/json.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -202,9 +204,16 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   std::vector<std::string> addedNodes;
   std::vector<std::string> removedNodes;
 
+  // Find added nodes
   for (const auto &id : afterNodes) {
     if (beforeNodes.find(id) == beforeNodes.end()) {
       addedNodes.push_back(id);
+    }
+  }
+  // Find removed nodes
+  for (const auto &id : beforeNodes) {
+    if (afterNodes.find(id) == afterNodes.end()) {
+      removedNodes.push_back(id);
     }
   }
 
@@ -229,27 +238,48 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   std::vector<std::string> addedEdges;
   std::vector<std::string> removedEdges;
 
+  // Find add edges
   for (const auto &id : afterEdges) {
     if (beforeEdges.find(id) == beforeEdges.end()) {
       addedEdges.push_back(id);
     }
   }
-
+  // Find remvoed edges
   for (const auto &id : beforeEdges) {
     if (afterEdges.find(id) == afterEdges.end()) {
       removedEdges.push_back(id);
     }
   }
 
+  // Check for modified edges
+  nlohmann::json modifiedEdges = nlohmann::json::object();
+  for (const auto &id : afterEdges) {
+    if (beforeEdges.find(id) != beforeEdges.end()) {
+      const Edge &beforeEdge = before.getEdge(id);
+      const Edge &afterEdge = after.getEdge(id);
+
+      if (beforeEdge.toJson() != afterEdge.toJson()) {
+        modifiedEdges[id] = afterEdge.toJson();
+      }
+    }
+  }
+
   // 3. Build delta
+  // Nodes:
   if (!addedNodes.empty())
     delta["added_nodes"] = addedNodes;
   if (!removedNodes.empty())
     delta["removed_nodes"] = removedNodes;
   if (!modifiedNodes.empty())
     delta["modified_nodes"] = modifiedNodes;
-
-  // Metadata change
+  // Edges:
+  if (!addedEdges.empty())
+    delta["added_edges"] = addedEdges;
+  if (!removedEdges.empty())
+    delta["removed_edges"] = removedEdges;
+  if (!modifiedEdges.empty())
+    delta["modified_edges"] = modifiedEdges;
+  // Metadata:
   if (before.getMetadata() != after.getMetadata()) {
     delta["metadata"] = after.getMetadata();
   }
