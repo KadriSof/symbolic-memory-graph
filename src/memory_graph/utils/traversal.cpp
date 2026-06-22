@@ -1,6 +1,8 @@
 #include "memory_graph/utils/traversal.hpp"
+#include "memory_graph/edge.hpp"
 #include "memory_graph/exceptions.hpp"
 #include "memory_graph/memory_graph.hpp"
+#include "memory_graph/node.hpp"
 #include <algorithm>
 #include <functional>
 #include <queue>
@@ -10,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace memory_graph::utils {
@@ -271,6 +274,121 @@ bool isConnected(const MemoryGraph &graph, const std::string &start) {
 
   auto visited = bfs(graph, start);
   return visited.size() == graph.getNodes().size();
+}
+
+// Subgraph Extraction
+MemoryGraph subgraph(const MemoryGraph &graph, const std::string &center,
+                     int radius, bool includeEdges) {
+  if (!graph.hasNode(center)) {
+    throw NodeNotFoundError(center);
+  }
+
+  // Get all nodes within radius
+  auto nodeIds = bfs(graph, center, radius);
+  std::unordered_set<std::string> nodeSet(nodeIds.begin(), nodeIds.end());
+
+  // Create new graph with same metadata
+  MemoryGraph subgraph(graph.getMetadata());
+
+  // Add nodes
+  for (const auto &id : nodeIds) {
+    subgraph.addNode(graph.getNode(id));
+  }
+
+  // Add edges
+  if (includeEdges) {
+    for (const auto &edge : graph.getEdges()) {
+      // Check for both endpoints in the subgraph
+      bool hasBothEndpoints = false;
+
+      if (std::holds_alternative<SymmetricConnections>(edge.getConnections())) {
+        const auto &conn_set =
+            std::get<SymmetricConnections>(edge.getConnections());
+        // For symmetric, check if ALL nodes are in subgraph
+        bool allInSubgraph = true;
+        for (const auto &nodeId : conn_set) {
+          if (nodeSet.find(nodeId) == nodeSet.end()) {
+            allInSubgraph = false;
+            break;
+          }
+        }
+        hasBothEndpoints = allInSubgraph;
+      } else {
+        const auto &conn_pair =
+            std::get<AsymmetricConnections>(edge.getConnections());
+        hasBothEndpoints = (nodeSet.find(conn_pair.first) != nodeSet.end() &&
+                            nodeSet.find(conn_pair.second) != nodeSet.end());
+      }
+
+      if (hasBothEndpoints) {
+        subgraph.addEdge(edge);
+      }
+    }
+  }
+
+  return subgraph;
+}
+
+MemoryGraph
+subgraphByPredicate(const MemoryGraph &graph,
+                    const std::function<bool(const Node &)> &predicate,
+                    bool includeNeighbors) {
+  std::unordered_set<std::string> selectedNodes;
+  std::unordered_set<std::string> finalNodes;
+
+  // Find nodes matching predicate
+  for (const auto &node : graph.getNodes()) {
+    if (predicate(node)) {
+      selectedNodes.insert(node.getId());
+      finalNodes.insert(node.getId());
+    }
+  }
+
+  // Include neighbors if requested
+  if (includeNeighbors) {
+    for (const auto &id : selectedNodes) {
+      for (const auto &neighborId : graph.getNode(id).getConnections()) {
+        finalNodes.insert(neighborId);
+      }
+    }
+  }
+
+  // Build subgraph
+  MemoryGraph subgraph(graph.getMetadata());
+
+  for (const auto &id : finalNodes) {
+    subgraph.addNode(graph.getNode(id));
+  }
+
+  // Add edges between selected nodes
+  for (const auto &edge : graph.getEdges()) {
+    bool hasBothEndpoints = false;
+
+    if (std::holds_alternative<SymmetricConnections>(edge.getConnections())) {
+      const auto &conn_set =
+          std::get<SymmetricConnections>(edge.getConnections());
+      bool allInSubgraph = true;
+      for (const auto &nodeId : conn_set) {
+        if (finalNodes.find(nodeId) == finalNodes.end()) {
+          allInSubgraph = false;
+          break;
+        }
+      }
+      hasBothEndpoints = allInSubgraph;
+    } else {
+      const auto &conn_pair =
+          std::get<AsymmetricConnections>(edge.getConnections());
+      hasBothEndpoints =
+          (finalNodes.find(conn_pair.first) != finalNodes.end() &&
+           finalNodes.find(conn_pair.second) != finalNodes.end());
+    }
+
+    if (hasBothEndpoints) {
+      subgraph.addEdge(edge);
+    }
+  }
+
+  return subgraph;
 }
 
 } // namespace memory_graph::utils
