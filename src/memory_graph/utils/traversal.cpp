@@ -391,4 +391,31 @@ subgraphByPredicate(const MemoryGraph &graph,
   return subgraph;
 }
 
+// Node Query Helpers
+std::vector<std::string> findNodesByLabel(const MemoryGraph &graph,
+                                          const std::string &label) {
+  std::vector<std::string> result;
+  for (const auto &node : graph.getNodes()) {
+    if (node.getLabel() == label) {
+      result.push_back(node.getId());
+    }
+  }
+
+  return result;
+}
+
+std::vector<std::string> findNodesByMetadata(const MemoryGraph &graph,
+                                             const std::string &key,
+                                             const nlohmann::json &value) {
+  std::vector<std::string> result;
+  for (const auto &node : graph.getNodes()) {
+    const auto &metadata = node.getMetadata();
+    if (metadata.contains(key) && metadata[key] == value) {
+      result.push_back(node.getId());
+    }
+  }
+
+  return result;
+}
+
 } // namespace memory_graph::utils
