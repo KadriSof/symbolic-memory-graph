@@ -422,61 +422,61 @@ std::vector<std::string> findNodesByMetadata(const MemoryGraph &graph,
 }
 
 // Context Window Utilities (for LLMs)
-nlohmann::json getContextWidnow(const MemoryGraph &graph,
-                                const std::string &center, size_t maxTokens,
-                                float minRelevance) {
-  if (!graph.hasNode(center)) {
-    throw NodeNotFoundError(center);
-  }
-
-  // Get nodes within radius (weighted by relevance) - simplified implementation
-  const int maxDepth = 5; // Default for context window
-
-  nlohmann::json result;
-  result["center"] = center;
-  result["nodes"] = nlohmann::json::array();
-  result["edges"] = nlohmann::json::array();
-
-  // Get BFS traversal
-  auto nodeIds = bfs(graph, center, maxDepth);
-  size_t tokenCount = 0;
-
-  for (const auto &id : nodeIds) {
-    const auto &node = graph.getNode(id);
-    const auto &connections = node.getConnections();
-
-    // Estimate token count (simplified: ~4 chars per token)
-    size_t nodeTokens =
-        node.getLabel().length() / 4 + node.getId().length() / 4 + 10;
-
-    if (tokenCount + nodeTokens > maxTokens && id != center) {
-      break;
-    }
-
-    tokenCount += nodeTokens;
-    result["nodes"].push_back({{"id", id},
-                               {"label", node.getLabel()},
-                               {"metadata", node.getMetadata()}});
-
-    // Add edges from this node
-    for (const auto &neighborId : connections) {
-      try {
-        // TODO: 'findEdgeId' is a private member. Find a way around this.
-        std::string edgeId = graph.findEdgeId(id, neighborId);
-        const auto &edge = graph.getEdge(edgeId);
-        if (edge.getWeight() >= minRelevance) {
-          result["edges"].push_back(edge.toJson());
-        }
-      } catch (const EdgeNotFoundError &) { // skip if edge not foun
-      }
-    }
-  }
-
-  result["token_count"] = tokenCount;
-  result["node_count"] = result["nodes"].size();
-  result["edge_count"] = result["edges"].size();
-
-  return result;
-}
+// nlohmann::json getContextWidnow(const MemoryGraph &graph,
+//                                 const std::string &center, size_t maxTokens,
+//                                 float minRelevance) {
+//   if (!graph.hasNode(center)) {
+//     throw NodeNotFoundError(center);
+//   }
+//
+//   // Get nodes within radius (weighted by relevance) - simplified
+//   implementation const int maxDepth = 5; // Default for context window
+//
+//   nlohmann::json result;
+//   result["center"] = center;
+//   result["nodes"] = nlohmann::json::array();
+//   result["edges"] = nlohmann::json::array();
+//
+//   // Get BFS traversal
+//   auto nodeIds = bfs(graph, center, maxDepth);
+//   size_t tokenCount = 0;
+//
+//   for (const auto &id : nodeIds) {
+//     const auto &node = graph.getNode(id);
+//     const auto &connections = node.getConnections();
+//
+//     // Estimate token count (simplified: ~4 chars per token)
+//     size_t nodeTokens =
+//         node.getLabel().length() / 4 + node.getId().length() / 4 + 10;
+//
+//     if (tokenCount + nodeTokens > maxTokens && id != center) {
+//       break;
+//     }
+//
+//     tokenCount += nodeTokens;
+//     result["nodes"].push_back({{"id", id},
+//                                {"label", node.getLabel()},
+//                                {"metadata", node.getMetadata()}});
+//
+//     // Add edges from this node
+//     for (const auto &neighborId : connections) {
+//       try {
+//         // TODO: 'findEdgeId' is a private member. Find a way around this.
+//         std::string edgeId = graph.findEdgeId(id, neighborId);
+//         const auto &edge = graph.getEdge(edgeId);
+//         if (edge.getWeight() >= minRelevance) {
+//           result["edges"].push_back(edge.toJson());
+//         }
+//       } catch (const EdgeNotFoundError &) { // skip if edge not foun
+//       }
+//     }
+//   }
+//
+//   result["token_count"] = tokenCount;
+//   result["node_count"] = result["nodes"].size();
+//   result["edge_count"] = result["edges"].size();
+//
+//   return result;
+// }
 
 } // namespace memory_graph::utils
