@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -107,6 +108,24 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
   return output;
 }
 
+// Helper func for testing and debuging
+bool isCompressed(const std::vector<uint8_t> &data) {
+  if (data.size() < 2)
+    return false;
+
+  // Check for zlib header
+  if (data[0] == 0x78 &&
+      (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C)) {
+    return true;
+  }
+
+  // Check for gzip header
+  if (data.size() >= 2 && data[0] == 0x1F && data[1] == 0x8B) {
+    return true;
+  }
+
+  return false;
+}
 MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   // 1. Decompress if needed
   std::vector<uint8_t> decompressedData;
@@ -114,14 +133,38 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   size_t rawSize = data.size();
 
   // Check if data is compressed
-  bool isCompressed =
-      (rawSize > 2 && rawData[0] == 0x78 &&
-       (rawData[1] == 0X01 || rawData[1] == 0x5E || rawData[1] == 0x9C));
+  bool isCompressed = false;
 
+  // Method 1: Check for zlib header (0x78 0x01, 0x78 0x5E, 0x78 0x9C)
+  if (rawSize > 2 && rawData[0] == 0x78) {
+    if (rawData[1] == 0x01 || rawData[1] == 0x5E || rawData[1] == 0x9C) {
+      isCompressed = true;
+    }
+  }
+
+  // Method 2: Check for gzip header (0x1F 0x8B)
+  if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
+      rawData[1] == 0x8B) {
+    isCompressed = true;
+  }
+
+  // Method 3: Check for magic bytes (if present, it's uncompressed)
+  if (rawSize > 4 && rawData[0] == 'M' && rawData[1] == 'E' &&
+      rawData[2] == 'M' && rawData[3] == 'G') {
+    isCompressed = false;
+  }
+
+  // Decompress
   if (isCompressed) {
-    decompressedData = decompress(data);
-    rawData = decompressedData.data();
-    rawSize = decompressedData.size();
+    try {
+      decompressedData = decompress(data);
+      rawData = decompressedData.data();
+      rawSize = decompressedData.size();
+    } catch (const std::exception &e) {
+      throw std::runtime_error(
+          "[serialization:fromBinary] Failed to decompress data: " +
+          std::string(e.what()));
+    }
   }
 
   // 2. Parse header

@@ -23,13 +23,20 @@ enum class CompressionType {
 };
 
 /**
+ * @brief Check if binary data is compressed
+ * @param data Binary data to check
+ * @return true if data appears to be compressed
+ */
+bool isCompressed(const std::vector<uint8_t> &data);
+
+/**
  * @brief Options for serialization
  */
 struct SerializationOptions {
   bool include_metadata = true;
   bool include_nodes = true;
   bool include_edges = true;
-  CompressionType compression = CompressionType::ZLIB;
+  CompressionType compression = CompressionType::NONE;
   uint32_t version = SERIALIZATION_VERSION;
 };
 
