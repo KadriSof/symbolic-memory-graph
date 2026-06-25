@@ -128,22 +128,27 @@ TEST(SerializationTest, SymmetricConnectionsPreserved) {
 
   // Use sets to handle potential duplicates
   const auto &luffyConn = original.getNode("luffy").getConnections();
-  std::unordered_set<std::string> luffySet(luffyConn.begin(), luffyConn.end());
-  EXPECT_EQ(luffySet.size(), 2);
-  EXPECT_TRUE(luffySet.count("zoro") > 0);
-  EXPECT_TRUE(luffySet.count("nami") > 0);
+  EXPECT_TRUE(std::find(luffyConn.begin(), luffyConn.end(), "zoro") !=
+              luffyConn.end());
+  EXPECT_TRUE(std::find(luffyConn.begin(), luffyConn.end(), "nami") !=
+              luffyConn.end());
+
+  EXPECT_TRUE(std::find(luffyConn.begin(), luffyConn.end(), "shanks") !=
+              luffyConn.end());
+  EXPECT_TRUE(std::find(luffyConn.begin(), luffyConn.end(), "straw_hats") !=
+              luffyConn.end());
 
   const auto &zoroConn = original.getNode("zoro").getConnections();
-  std::unordered_set<std::string> zoroSet(zoroConn.begin(), zoroConn.end());
-  EXPECT_EQ(zoroSet.size(), 2);
-  EXPECT_TRUE(zoroSet.count("luffy") > 0);
-  EXPECT_TRUE(zoroSet.count("nami") > 0);
+  EXPECT_TRUE(std::find(luffyConn.begin(), luffyConn.end(), "shanks") !=
+              luffyConn.end());
+  EXPECT_TRUE(std::find(luffyConn.begin(), luffyConn.end(), "straw_hats") !=
+              luffyConn.end());
 
   const auto &namiConn = original.getNode("nami").getConnections();
-  std::unordered_set<std::string> namiSet(namiConn.begin(), namiConn.end());
-  EXPECT_EQ(namiSet.size(), 2);
-  EXPECT_TRUE(namiSet.count("luffy") > 0);
-  EXPECT_TRUE(namiSet.count("zoro") > 0);
+  EXPECT_TRUE(std::find(namiConn.begin(), namiConn.end(), "luffy") !=
+              namiConn.end());
+  EXPECT_TRUE(std::find(namiConn.begin(), namiConn.end(), "zoro") !=
+              namiConn.end());
 
   // Serialize and deserialize
   std::vector<uint8_t> binary = toBinary(original);
@@ -151,11 +156,10 @@ TEST(SerializationTest, SymmetricConnectionsPreserved) {
 
   // Verify symmetric connections preserved in deserialized
   const auto &desLuffyConn = deserialized.getNode("luffy").getConnections();
-  std::unordered_set<std::string> desLuffySet(desLuffyConn.begin(),
-                                              desLuffyConn.end());
-  EXPECT_EQ(desLuffySet.size(), 2);
-  EXPECT_TRUE(desLuffySet.count("zoro") > 0);
-  EXPECT_TRUE(desLuffySet.count("nami") > 0);
+  EXPECT_TRUE(std::find(desLuffyConn.begin(), desLuffyConn.end(), "zoro") !=
+              desLuffyConn.end());
+  EXPECT_TRUE(std::find(desLuffyConn.begin(), desLuffyConn.end(), "nami") !=
+              desLuffyConn.end());
 }
 
 TEST(SerializationTest, AsymmetricConnectionsPreserved) {
@@ -206,10 +210,14 @@ TEST(SerializationTest, ComputeDeltaSymmetricAddedNodes) {
 
   EXPECT_TRUE(delta.contains("added_nodes"));
   EXPECT_EQ(delta["added_nodes"].size(), 1);
-  EXPECT_EQ(delta["added_nodes"][0], "usopp");
+  EXPECT_TRUE(delta["added_nodes"].contains("usopp"));        // Check by key
+  EXPECT_EQ(delta["added_nodes"]["usopp"]["label"], "Usopp"); // Verify data
 
   EXPECT_TRUE(delta.contains("added_edges"));
   EXPECT_EQ(delta["added_edges"].size(), 3);
+  EXPECT_TRUE(delta["added_edges"].contains("luffy_usopp"));
+  EXPECT_TRUE(delta["added_edges"].contains("zoro_usopp"));
+  EXPECT_TRUE(delta["added_edges"].contains("nami_usopp"));
 }
 
 TEST(SerializationTest, ApplyDeltaWithSymmetricConnections) {

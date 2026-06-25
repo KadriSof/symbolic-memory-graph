@@ -215,7 +215,7 @@ TEST(MemoryGraphTest, GetEdge) {
 
   const Edge &edge = graph.getEdge("luffy_zoro");
   EXPECT_EQ(edge.getId(), "luffy_zoro");
-  EXPECT_EQ(edge.getLabel(), "crew_mate");
+  EXPECT_EQ(edge.getLabel(), "crew_member");
   EXPECT_EQ(edge.getType(), EdgeType::SYMMETRIC);
 }
 
@@ -228,7 +228,7 @@ TEST(MemoryGraphTest, GetEdges) {
   MemoryGraph graph = createTestGraph();
   std::vector<Edge> edges = graph.getEdges();
 
-  EXPECT_EQ(edges.size(), 4);
+  EXPECT_EQ(edges.size(), 5);
 
   std::unordered_set<std::string> edgeIds;
   for (const auto &edge : edges) {
@@ -339,7 +339,7 @@ TEST(MemoryGraphTest, ToJson) {
   EXPECT_TRUE(graphJson.contains("edges"));
   EXPECT_EQ(graphJson["metadata"]["name"], "Test Graph");
   EXPECT_EQ(graphJson["nodes"].size(), 5);
-  EXPECT_EQ(graphJson["edges"].size(), 4);
+  EXPECT_EQ(graphJson["edges"].size(), 5);
 
   // Check a specific node
   EXPECT_TRUE(graphJson["nodes"].contains("luffy"));
@@ -375,7 +375,7 @@ TEST(MemoryGraphTest, FromJson) {
   EXPECT_EQ(luffy.getMetadata()["bounty"], 3000000000);
 
   // Check edges
-  EXPECT_EQ(deserialized.getEdges().size(), 4);
+  EXPECT_EQ(deserialized.getEdges().size(), 5);
   EXPECT_TRUE(deserialized.hasEdge("luffy_zoro"));
   EXPECT_TRUE(deserialized.hasEdge("luffy_shanks"));
 
