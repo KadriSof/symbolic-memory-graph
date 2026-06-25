@@ -385,12 +385,21 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
 void applyDeltaBinary(MemoryGraph &graph,
                       const std::vector<uint8_t> &deltaData) {
   // Decompress if needed
+  if (deltaData.empty()) {
+    throw std::runtime_error(
+        "[utils:serialization] applyDeltaBinary: empty delta data");
+  }
+
   std::vector<uint8_t> decompressed;
   const uint8_t *data = deltaData.data();
   size_t size = deltaData.size();
 
-  bool isCompressed = (size > 2 && data[0] == 0x78 &&
-                       (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C));
+  bool isCompressed = false;
+  if (size > 2 && data[0] == 0x78) {
+    if (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C) {
+      isCompressed = true;
+    }
+  }
 
   if (isCompressed) {
     decompressed = decompress(deltaData);
@@ -399,6 +408,11 @@ void applyDeltaBinary(MemoryGraph &graph,
   }
 
   // Parse JSON delta
+  if (size == 0) {
+    throw std::runtime_error("[utils:serialization] applyDeltaBinary: empty "
+                             "data after decompression");
+  }
+
   std::string jsonString(reinterpret_cast<const char *>(data), size);
   nlohmann::json delta = nlohmann::json::parse(jsonString);
 
@@ -430,8 +444,15 @@ std::vector<uint8_t> compress(const std::vector<uint8_t> &data,
 
 std::vector<uint8_t> decompress(const std::vector<uint8_t> &data) {
   // Check ZLIB header
-  if (data.size() < 2 && data[0] != 0x78) {
-    throw std::runtime_error("[utils:serialization] Invalid compressed data");
+  if (data.size() < 2) {
+    throw std::runtime_error(
+        "[utils:serialization] Invalide compressed data: data too small");
+  }
+
+  if (data[0] != 0x78 ||
+      data[1] != 0x01 && data[1] != 0x5E && data[1] != 0x9C) {
+    throw std::runtime_error(
+        "[utils:serialization] Invalid compressed data: incorrect zlib header");
   }
 
   // TODO: we need a ZLIB's inflate here
