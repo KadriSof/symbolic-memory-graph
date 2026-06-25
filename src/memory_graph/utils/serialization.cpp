@@ -291,7 +291,9 @@ nlohmann::json computeDelta(const MemoryGraph &before,
       removedNodes.push_back(id);
     }
   }
-  // Find removed nodes
+
+  // Find removed nodes: store IDs only
+  std::vector<std::string> removedNodes;
   for (const auto &id : beforeNodes) {
     if (afterNodes.find(id) == afterNodes.end()) {
       removedNodes.push_back(id);
