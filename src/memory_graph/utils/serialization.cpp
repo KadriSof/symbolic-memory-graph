@@ -244,16 +244,16 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   auto beforeNodes = getNodeIds(before);
   auto afterNodes = getNodeIds(after);
 
-  std::vector<std::string> addedNodes;
-  std::vector<std::string> removedNodes;
-
-  // Find added nodes
+  // Find added nodes: store full JSON data
+  nlohmann::json addedNodes = nlohmann::json::object();
   for (const auto &id : afterNodes) {
     if (beforeNodes.find(id) == beforeNodes.end()) {
-      addedNodes.push_back(id);
+      addedNodes[id] = after.getNode(id).toJson(); // Full node data
     }
   }
-  // Find removed nodes
+
+  // Find removed nodes: store IDs only
+  std::vector<std::string> removedNodes;
   for (const auto &id : beforeNodes) {
     if (afterNodes.find(id) == afterNodes.end()) {
       removedNodes.push_back(id);
@@ -278,20 +278,18 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   auto beforeEdges = getEdgeIds(before);
   auto afterEdges = getEdgeIds(after);
 
-  std::vector<std::string> addedEdges;
-  std::vector<std::string> removedEdges;
-
-  // Find add edges
+  // Find added edges: store full JSON data
+  nlohmann::json addedEdges = nlohmann::json::object();
   for (const auto &id : afterEdges) {
     if (beforeEdges.find(id) == beforeEdges.end()) {
-      addedEdges.push_back(id);
+      addedEdges[id] = after.getEdge(id).toJson(); // Full edge data
     }
   }
-  // Find remvoed edges
+
+  // Find removed edges: store IDs only
+  std::vector<std::string> removedEdges;
   for (const auto &id : beforeEdges) {
-    if (afterEdges.find(id) == afterEdges.end()) {
-      removedEdges.push_back(id);
-    }
+    removedEdges.push_back(id);
   }
 
   // Check for modified edges
@@ -356,28 +354,65 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
 
   // 4. Add nodes
   if (delta.contains("added_nodes")) {
-    // TODO: Needs to be adjusted to store full node data in delta
-    for (const auto &nodeId : delta["added_nodes"]) {
-      if (delta.contains("modified_nodes") &&
-          delta["modified_nodes"].contains(nodeId)) {
-        Node node = Node::fromJson(delta["modified_nodes"][nodeId]);
+    for (auto it = delta["added_nodes"].begin();
+         it != delta["added_nodes"].end(); ++it) {
+      std::string nodeId = it.key();
+      nlohmann::json nodeJson = it.value();
+
+      // Create node from JSON and add it
+      Node node = Node::fromJson(nodeJson);
+      graph.addNode(node);
+    }
+  }
+
+  // 5. Add/update modified nodes
+  if (delta.contains("modified_nodes")) {
+    for (auto it = delta["modified_nodes"].begin();
+         it != delta["modified_nodes"].end(); ++it) {
+      std::string nodeId = it.key();
+      nlohmann::json nodeJson = it.value();
+
+      // We can't replace a node so we remove and re-add it
+      if (graph.hasNode(nodeId)) {
+        // Save connections before removal
+        auto connections = graph.getNode(nodeId).getConnections();
+        graph.removeNode(nodeId);
+
+        // Add the modified node
+        Node node = Node::fromJson(nodeJson);
         graph.addNode(node);
       }
     }
   }
 
-  // 5. Add/update edges
-  if (delta.contains("modified_edeges")) {
-    for (auto it = delta["modified_edges"].begin();
-         it != delta["modified_edeges"].end(); ++it) {
-      Edge edge = Edge::fromJson(it.value());
-      if (!graph.hasEdge(edge.getId())) {
+  // 6. Add edges
+  if (delta.contains("added_edges")) {
+    for (auto it = delta["added_edges"].begin();
+         it != delta["added_edges"].end(); ++it) {
+      std::string edgeId = it.key();
+      nlohmann::json edgeJson = it.value();
+
+      if (!graph.hasEdge(edgeId)) {
+        Edge edge = Edge::fromJson(edgeJson);
         graph.addEdge(edge);
       }
+    }
+  }
 
-      // If edge exists, we would need to update it (not implemented yet)
-      // TODO: for complete implementation, we would need to store full
-      // node/edge data in the data delta for additions and updates.
+  // 7. Update modified edges
+  if (delta.contains("modified_edges")) {
+    for (auto it = delta["modified_edges"].begin();
+         it != delta["modified_edges"].end(); ++it) {
+      std::string edgeId = it.key();
+      nlohmann::json edgeJson = it.value();
+
+      // We remove and re-add modified edges
+      if (graph.hasEdge(edgeId)) {
+        graph.removeEdge(edgeId);
+      }
+
+      Edge edge = Edge::fromJson(edgeJson);
+      graph.addEdge(edge);
     }
   }
 }
