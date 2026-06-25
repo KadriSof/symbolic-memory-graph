@@ -135,9 +135,11 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   // Check if data is compressed
   bool isCompressed = false;
 
-  // Method 1: Check for zlib header (0x78 0x01, 0x78 0x5E, 0x78 0x9C)
+  // Method 1: Check for zlib header (0x78 0x01, 0x78 0x5E, 0x78 0x9C, 0x78
+  // 0xDA)
   if (rawSize > 2 && rawData[0] == 0x78) {
-    if (rawData[1] == 0x01 || rawData[1] == 0x5E || rawData[1] == 0x9C) {
+    if (rawData[1] == 0x01 || rawData[1] == 0x5E ||
+        rawData[1] == 0x9C rawData[1] == 0xDA) {
       isCompressed = true;
     }
   }
@@ -206,10 +208,38 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
                              std::to_string(version));
   }
 
+  if (offset > rawSize) {
+    throw std::runtime_error("[serialization:fromBinary] Invalid binary data: "
+                             "header offset exceeds data size");
+  }
+
+  if (data_size > rawSize - offset) {
+    throw std::runtime_error(
+        "[serialization:fromBinary] Invalid binary data: data_size (" +
+        std::to_string(data_size) + ") excceds remaining buffer size (" +
+        std::to_string(rawSize - offset) + "(");
+  }
+
+  const size_t MAX_DATA_SIZE = 100 * 1024 * 1024; // 100 MB
+  if (data_size > MAX_DATA_SIZE) {
+    throw std::runtime_error(
+        "[serialization:binary] Invalid binary data: data_size (" +
+        std::to_string(data_size) + ") excceds maximum allowed (" +
+        std::to_string(MAX_DATA_SIZE) + ")");
+  }
+
   // 4. Parse JSON data
   std::string jsonString(reinterpret_cast<const char *>(rawData + offset),
                          data_size);
-  nlohmann::json graphJson = nlohmann::json::parse(jsonString);
+
+  nlohmann::json graphJson;
+  try {
+    graphJson = nlohmann::json::parse(jsonString);
+  } catch (const nlohmann::json::parse_error &e) {
+    throw std::runtime_error(
+        "[serialization:fromBinary] Failed to parse JSON: " +
+        std::string(e.what()));
+  }
 
   // 5. Reconstruct graph
   return MemoryGraph::fromJson(graphJson);
