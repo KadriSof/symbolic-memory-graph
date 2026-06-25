@@ -243,6 +243,15 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
         "[serialization:fromBinary] Failed to parse JSON: " +
         std::string(e.what()));
   }
+
+  nlohmann::json graphJson;
+  try {
+    graphJson = nlohmann::json::parse(jsonString);
+  } catch (const nlohmann::json::parse_error &e) {
+    throw std::runtime_error(
+        "[serialization:fromBinary] Failed to parse JSON: " +
+        std::string(e.what()));
+  }
   // 5. Reconstruct graph
   return MemoryGraph::fromJson(graphJson);
 }
