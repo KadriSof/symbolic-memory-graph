@@ -138,8 +138,8 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   // Method 1: Check for zlib header (0x78 0x01, 0x78 0x5E, 0x78 0x9C, 0x78
   // 0xDA)
   if (rawSize > 2 && rawData[0] == 0x78) {
-    if (rawData[1] == 0x01 || rawData[1] == 0x5E ||
-        rawData[1] == 0x9C rawData[1] == 0xDA) {
+    if (rawData[1] == 0x01 || rawData[1] == 0x5E || rawData[1] == 0x9C ||
+        rawData[1] == 0xDA) {
       isCompressed = true;
     }
   }
@@ -526,16 +526,36 @@ std::vector<uint8_t> decompress(const std::vector<uint8_t> &data) {
   return result;
 }
 
-// Version Management
-uint32_t getVersion(const std::vector<uint8_t> &data) {
+/**
+ * @brief Internal helper to parse and validate the binary header
+ * @param data Binary data to parse
+ * @param out_version Output parameter for the extracted version (optional)
+ * @param out_node_count Output parameter for node count (optional)
+ * @param out_edge_count Output parameter for edge count (optional)
+ * @param out_data_size Output parameter for data size (optional)
+ * @throws std::runtime_error if header is Invalid
+ */
+static void parseAndValidateHeader(const std::vector<uint8_t> &data,
+                                   uint32_t *out_version = nullptr,
+                                   uint32_t *out_node_count = nullptr,
+                                   uint32_t *out_edge_count = nullptr,
+                                   uint32_t *out_data_size = nullptr) {
+  // 1. Decompress if needed
   std::vector<uint8_t> decompressedData;
   const uint8_t *rawData = data.data();
   size_t rawSize = data.size();
 
   // Check if compressed
-  bool isCompressed =
-      (rawSize > 2 && rawData[0] == 0x78 &&
-       (rawData[1] == 0x01 || rawData[1] == 0x5E || rawData[1] == 0x9C));
+  bool isCompressed = false;
+  if (rawSize > 2 && data[0] == 0x78) {
+    if (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C) {
+      isCompressed = true;
+    }
+  }
+  if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
+      rawData[1] == 0x8B) {
+    isCompressed = true;
+  }
 
   if (isCompressed) {
     decompressedData = decompress(data);
@@ -543,26 +563,76 @@ uint32_t getVersion(const std::vector<uint8_t> &data) {
     rawSize = decompressedData.size();
   }
 
+  // 2. Validate minimum size
   if (rawSize < BinaryHeader::SIZE) {
+    throw std::runtime_error("[serialization:parseAndValidateHeaderi] Invalid "
+                             "binary data: too small");
+  }
+
+  // 3. Read header fields
+  auto readU32 = [&rawData, &rawSize](size_t &offset) -> uint32_t {
+    if (offset + 4 > rawSize) {
+      throw std::runtime_error(
+          "[serialization:fromBinary] Invalid binary data: unexpected EOF");
+    }
+    uint32_t value = static_cast<uint32_t>(rawData[offset]) |
+                     (static_cast<uint32_t>(rawData[offset + 1]) << 8) |
+                     (static_cast<uint32_t>(rawData[offset + 2]) << 16) |
+                     (static_cast<uint32_t>(rawData[offset + 3]) << 24);
+    offset += 4;
+    return value;
+  };
+
+  size_t offset = 0;
+  uint32_t magic = readU32(offset);
+  uint32_t version = readU32(offset);
+  uint32_t flags = readU32(offset);
+  uint32_t node_count = readU32(offset);
+  uint32_t edge_count = readU32(offset);
+  uint32_t data_size = readU32(offset);
+
+  // 4. Validate magic bytes first
+  if (magic != MAGIC) {
+    throw std::runtime_error("[serialization:parseAndValidateHeader] Invalid "
+                             "binary data: Incorrect magic bytes");
+  }
+
+  // 5. Validate version
+  if (version != SERIALIZATION_VERSION) {
     throw std::runtime_error(
-        "[utils:serialization] Invalide binary data: too small");
+        "[serialization:parseAndValidateHeader] Version mismatch: expected " +
+        std::to_string(SERIALIZATION_VERSION) + ", got " +
+        std::to_string(version));
   }
 
-  // Read version from header (4 bytes at offset 4)
-  if (rawSize < 8) {
-    throw std::runtime_error("Invalid binary data");
+  // 6.Validate data_size fits in buffer
+  if (offset + data_size > rawSize) {
+    throw std::runtime_error("serialization:parseAndValidateHeader] Invalid "
+                             "binary data: data_size exceeds buffer");
   }
 
-  uint32_t version =
-      rawData[4] | (rawData[5] << 8) | (rawData[6] << 16) | (rawData[7] << 24);
+  if (out_version)
+    *out_version = version;
+  if (out_node_count)
+    *out_node_count = node_count;
+  if (out_edge_count)
+    *out_edge_count = edge_count;
+  if (out_data_size)
+    *out_data_size = data_size;
+}
+
+// Version Management
+uint32_t getVersion(const std::vector<uint8_t> &data) {
+  uint32_t version = 0;
+  parseAndValidateHeader(data, &version);
   return version;
 }
 
 bool isValidFormat(const std::vector<uint8_t> &data) {
   try {
-    uint32_t version = getVersion(data);
-    return version >= 1 && version <= SERIALIZATION_VERSION;
-  } catch (...) {
+    parseAndValidateHeader(data);
+    return true;
+  } catch (const std::exception &) {
     return false;
   }
 }
