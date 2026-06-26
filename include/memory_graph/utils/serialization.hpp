@@ -108,7 +108,17 @@ std::vector<uint8_t> decompress(const std::vector<uint8_t> &data);
  * @return Compression ratio (0.0 - 1.0, lower is better)
  */
 inline float compressionRatio(size_t original, size_t compressed) {
-  return compressed / static_cast<float>(original);
+  if (original == 0) {
+    return 0.0f; // No data to compress, return 0 as safe default
+  }
+
+  float ratio = compressed / static_cast<float>(original);
+  // Clamp to [0.0, 1.0] range
+  if (ratio < 0.0f)
+    return 0.0f;
+  if (ratio > 1.0f)
+    return 1.0f;
+  return ratio;
 }
 
 // Version Management
