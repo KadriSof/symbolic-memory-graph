@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include <vector>
+#include <zconf.h>
 #include <zlib.h>
 // #include <lz4.h>  // TODO: Implement the LZ4 later
 
@@ -58,13 +59,29 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
   // 1. We get the JSON representation (no Jasons were harmed during this
   // serialization)
   nlohmann::json graphJson = graph.toJson();
+  BinaryHeader header;
 
   // 2. Build data buffer (JSON as string)
+  if (!options.include_nodes) {
+    header.node_count = 0; // Update header to reflect reality
+    if (graphJson.contains("nodes"))
+      graphJson["nodes"] = nlohmann::json::array();
+  }
+  if (!options.include_edges) {
+    header.edge_count = 0;
+    if (graphJson.contains("edges"))
+      graphJson["edges"] = nlohmann::json::array();
+  }
+  if (!options.include_metadata) {
+    if (graphJson.contains("metadata"))
+      graphJson.erase("metadata");
+  }
+
+  // Build data buffer (JSON as string)
   std::string jsonString = graphJson.dump();
   std::vector<uint8_t> data(jsonString.begin(), jsonString.end());
 
   // 3. Build header
-  BinaryHeader header;
   header.magic = MAGIC;
   header.version = options.version;
   header.flags = 0;
@@ -120,10 +137,10 @@ bool isCompressed(const std::vector<uint8_t> &data) {
     return true;
   }
 
-  // Check for gzip header
-  if (data.size() >= 2 && data[0] == 0x1F && data[1] == 0x8B) {
-    return true;
-  }
+  // Check for gzip header (we will add this later)
+  // if (data.size() >= 2 && data[0] == 0x1F && data[1] == 0x8B) {
+  //   return true;
+  //   }
 
   return false;
 }
@@ -147,10 +164,10 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   }
 
   // Method 2: Check for gzip header (0x1F 0x8B)
-  if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
-      rawData[1] == 0x8B) {
-    isCompressed = true;
-  }
+  // if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
+  //     rawData[1] == 0x8B) {
+  //   isCompressed = true;
+  // }
 
   // Method 3: Check for magic bytes (if present, it's uncompressed)
   if (rawSize > 4 && rawData[0] == 'M' && rawData[1] == 'E' &&
@@ -220,7 +237,7 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
     throw std::runtime_error(
         "[serialization:fromBinary] Invalid binary data: data_size (" +
         std::to_string(data_size) + ") excceds remaining buffer size (" +
-        std::to_string(rawSize - offset) + "(");
+        std::to_string(rawSize - offset) + ")");
   }
 
   const size_t MAX_DATA_SIZE = 100 * 1024 * 1024; // 100 MB
@@ -338,6 +355,9 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   // Find removed edges: store IDs only
   std::vector<std::string> removedEdges;
   for (const auto &id : beforeEdges) {
+    if (afterEdges.find(id) == afterEdges.end()) {
+      removedEdges.push_back(id);
+    }
     removedEdges.push_back(id);
   }
 
@@ -436,13 +456,23 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
 
       // We can't replace a node so we remove and re-add it
       if (graph.hasNode(nodeId)) {
-        // Save connections before removal
-        auto connections = graph.getNode(nodeId).getConnections();
-        graph.removeNode(nodeId);
+        // Save the actual edge objects before we delete the node
+        std::vector<Edge> incidentEdges;
+        auto connectionIds = graph.getNode(nodeId).getConnections();
+        for (const auto &edgeId : connectionIds) {
+          if (graph.hasEdge(edgeId)) {
+            incidentEdges.push_back(graph.getEdge(edgeId));
+          }
+        }
 
-        // Add the modified node
+        // Remove and re-add the node
+        graph.removeNode(nodeId);
         Node node = Node::fromJson(nodeJson);
         graph.addNode(node);
+
+        for (const auto &edge : incidentEdges) {
+          graph.addEdge(edge);
+        }
       }
     }
   }
@@ -525,12 +555,18 @@ std::vector<uint8_t> compress(const std::vector<uint8_t> &data,
   // TODO: Implement the rest of compression types later (with proper wrappers
   // and error handling)
   if (type == CompressionType::ZLIB) {
-    // For now, we will jus return uncompressed data with a marker
-    std::vector<uint8_t> result;
-    result.reserve(data.size() + 2);
-    result.push_back(0x78); // ZLIB header
-    result.push_back(0x01); // ZLIB header
-    result.insert(result.end(), data.begin(), data.end());
+    uLongf conpressedSize = compressBound(data.size());
+    std::vector<uint8_t> result(conpressedSize);
+
+    int ret = compress2(result.data(), &conpressedSize, data.data(),
+                        data.size(), Z_DEFAULT_COMPRESSION);
+    if (ret != Z_OK) {
+      throw std::runtime_error(
+          "[serialization:compress] ZLIB compression failed: " +
+          std::to_string(ret));
+    }
+
+    result.resize(conpressedSize);
     return result;
   }
 
@@ -540,21 +576,36 @@ std::vector<uint8_t> compress(const std::vector<uint8_t> &data,
 }
 
 std::vector<uint8_t> decompress(const std::vector<uint8_t> &data) {
-  // Check ZLIB header
   if (data.size() < 2) {
-    throw std::runtime_error(
-        "[utils:serialization] Invalide compressed data: data too small");
+    throw std::runtime_error("[serialization:decompress] Invlaid compressed "
+                             "data: data size too small");
   }
 
-  if (data[0] != 0x78 ||
-      data[1] != 0x01 && data[1] != 0x5E && data[1] != 0x9C) {
-    throw std::runtime_error(
-        "[utils:serialization] Invalid compressed data: incorrect zlib header");
+  if (data[0] != 0x78 || (data[1] != 0x01 && data[1] != 0x5E &&
+                          data[1] != 0x9C && data[1] != 0XDA)) {
+    throw std::runtime_error("serialization:decompress] Invalid compressed "
+                             "data: incorrect ZLIB header");
   }
 
-  // TODO: we need a ZLIB's inflate here
-  std::vector<uint8_t> result(data.size() - 2);
-  std::memcpy(result.data(), data.data() + 2, result.size());
+  uLongf uncompressedSize = data.size() * 4;
+  if (uncompressedSize < 1024)
+    uncompressedSize = 1024;
+  std::vector<uint8_t> result(uncompressedSize);
+
+  int ret;
+  while ((ret = uncompress(result.data(), &uncompressedSize, data.data(),
+                           data.size())) == Z_BUF_ERROR) {
+    uncompressedSize *= 2;
+    result.resize(uncompressedSize);
+  }
+
+  if (ret != Z_OK) {
+    throw std::runtime_error(
+        "[serialization:decompress] ZLIB decompression failed: " +
+        std::to_string(ret));
+  }
+
+  result.resize(uncompressedSize);
   return result;
 }
 
@@ -584,10 +635,10 @@ static void parseAndValidateHeader(const std::vector<uint8_t> &data,
       isCompressed = true;
     }
   }
-  if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
-      rawData[1] == 0x8B) {
-    isCompressed = true;
-  }
+  // if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
+  //     rawData[1] == 0x8B) {
+  //   isCompressed = true;
+  // }
 
   if (isCompressed) {
     decompressedData = decompress(data);
@@ -597,7 +648,7 @@ static void parseAndValidateHeader(const std::vector<uint8_t> &data,
 
   // 2. Validate minimum size
   if (rawSize < BinaryHeader::SIZE) {
-    throw std::runtime_error("[serialization:parseAndValidateHeaderi] Invalid "
+    throw std::runtime_error("[serialization:parseAndValidateHeader] Invalid "
                              "binary data: too small");
   }
 
