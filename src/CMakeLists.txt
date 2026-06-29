@@ -8,6 +8,8 @@ add_library(memory_graph STATIC
   memory_graph/utils/traversal.cpp
 )
 
+find_package(ZLIB REQUIRED)
+
 # Specify include directories
 target_include_directories(memory_graph
   PUBLIC
@@ -17,7 +19,12 @@ target_include_directories(memory_graph
 )
 
 # Link dependencies
-target_link_libraries(memory_graph PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(memory_graph 
+  PUBLIC
+    nlohmann_json::nlohmann_json
+  PRIVATE
+    ZLIB::ZLIB
+  )
 
 # Install headers
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/memory_graph
