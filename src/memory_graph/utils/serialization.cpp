@@ -63,7 +63,7 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
 
   // 2. Build data buffer (JSON as string)
   if (!options.include_nodes) {
-    header.node_count = 0; // Update header to reflect reality
+    header.node_count = 0;
     if (graphJson.contains("nodes"))
       graphJson["nodes"] = nlohmann::json::array();
   }
