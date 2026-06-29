@@ -260,15 +260,6 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
         "[serialization:fromBinary] Failed to parse JSON: " +
         std::string(e.what()));
   }
-
-  nlohmann::json graphJson;
-  try {
-    graphJson = nlohmann::json::parse(jsonString);
-  } catch (const nlohmann::json::parse_error &e) {
-    throw std::runtime_error(
-        "[serialization:fromBinary] Failed to parse JSON: " +
-        std::string(e.what()));
-  }
   // 5. Reconstruct graph
   return MemoryGraph::fromJson(graphJson);
 }
@@ -318,14 +309,6 @@ nlohmann::json computeDelta(const MemoryGraph &before,
     }
   }
 
-  // Find removed nodes: store IDs only
-  std::vector<std::string> removedNodes;
-  for (const auto &id : beforeNodes) {
-    if (afterNodes.find(id) == afterNodes.end()) {
-      removedNodes.push_back(id);
-    }
-  }
-
   // Check for modified nodes
   nlohmann::json modifiedNodes = nlohmann::json::object();
   for (const auto &id : afterNodes) {
@@ -359,19 +342,6 @@ nlohmann::json computeDelta(const MemoryGraph &before,
       removedEdges.push_back(id);
     }
     removedEdges.push_back(id);
-  }
-
-  // Check for modified edges
-  nlohmann::json modifiedEdges = nlohmann::json::object();
-  for (const auto &id : afterEdges) {
-    if (beforeEdges.find(id) != beforeEdges.end()) {
-      const Edge &beforeEdge = before.getEdge(id);
-      const Edge &afterEdge = after.getEdge(id);
-
-      if (beforeEdge.toJson() != afterEdge.toJson()) {
-        modifiedEdges[id] = afterEdge.toJson();
-      }
-    }
   }
 
   // Check for modified edges
