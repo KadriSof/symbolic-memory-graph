@@ -1,60 +1,18 @@
 #include "memory_graph/edge.hpp"
 #include "memory_graph/exceptions.hpp"
 #include "memory_graph/memory_graph.hpp"
+#include "memory_graph/node.hpp"
+#include "test_utils.hpp"
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
+using namespace test_utils;
 using namespace memory_graph;
 using json = nlohmann::json;
-
-// Helper Functions:
-
-// Helper to create test graph
-MemoryGraph createTestGraph() {
-  MemoryGraph graph(json{{"name", "Test Graph"}, {"version", "1.0"}});
-
-  // Add nodes
-  Node luffy("luffy", "Monkey D. Luffy",
-             json{{"type", "character"}, {"bounty", 3000000000}});
-  Node zoro("zoro", "Roronoa Zoro",
-            json{{"type", "character"}, {"bounty", 1111000000}});
-  Node nami("nami", "Nami", json{{"type", "character"}, {"bounty", 366000000}});
-  Node shanks("shanks", "Shanks",
-              json{{"type", "character"}, {"bounty", 4048900000}});
-  Node strawHats("straw_hats", "Straw Hat Pirates", json{{"type", "crew"}});
-
-  graph.addNode(luffy);
-  graph.addNode(zoro);
-  graph.addNode(nami);
-  graph.addNode(shanks);
-  graph.addNode(strawHats);
-
-  // Add edges
-  SymmetricConnections luffyZoroConn{"luffy", "zoro"};
-  Edge crewMate1("luffy_zoro", "crew_mate", EdgeType::SYMMETRIC, luffyZoroConn,
-                 1.0f);
-  graph.addEdge(crewMate1);
-
-  SymmetricConnections luffyNamiConn{"luffy", "nami"};
-  Edge crewMate2("luffy_nami", "crew_mate", EdgeType::SYMMETRIC, luffyNamiConn,
-                 1.0f);
-  graph.addEdge(crewMate2);
-
-  AsymmetricConnections luffyShanksConn{"luffy", "shanks"};
-  Edge inspiration("luffy_shanks", "inspired_by", EdgeType::ASYMMETRIC,
-                   luffyShanksConn, 0.95f,
-                   json{{"since", "Age 7"}, {"location", "East Blue"}});
-  graph.addEdge(inspiration);
-
-  AsymmetricConnections luffyCrewConn{"luffy", "straw_hats"};
-  Edge captain("luffy_captain", "is_captain_of", EdgeType::ASYMMETRIC,
-               luffyCrewConn, 1.0f);
-  graph.addEdge(captain);
-
-  return graph;
-}
 
 // Constructor Tests
 TEST(MemoryGraphTest, ConstructorWithMetadata) {
@@ -257,7 +215,7 @@ TEST(MemoryGraphTest, GetEdge) {
 
   const Edge &edge = graph.getEdge("luffy_zoro");
   EXPECT_EQ(edge.getId(), "luffy_zoro");
-  EXPECT_EQ(edge.getLabel(), "crew_mate");
+  EXPECT_EQ(edge.getLabel(), "crew_member");
   EXPECT_EQ(edge.getType(), EdgeType::SYMMETRIC);
 }
 
@@ -270,7 +228,7 @@ TEST(MemoryGraphTest, GetEdges) {
   MemoryGraph graph = createTestGraph();
   std::vector<Edge> edges = graph.getEdges();
 
-  EXPECT_EQ(edges.size(), 4);
+  EXPECT_EQ(edges.size(), 5);
 
   std::unordered_set<std::string> edgeIds;
   for (const auto &edge : edges) {
@@ -381,7 +339,7 @@ TEST(MemoryGraphTest, ToJson) {
   EXPECT_TRUE(graphJson.contains("edges"));
   EXPECT_EQ(graphJson["metadata"]["name"], "Test Graph");
   EXPECT_EQ(graphJson["nodes"].size(), 5);
-  EXPECT_EQ(graphJson["edges"].size(), 4);
+  EXPECT_EQ(graphJson["edges"].size(), 5);
 
   // Check a specific node
   EXPECT_TRUE(graphJson["nodes"].contains("luffy"));
@@ -417,7 +375,7 @@ TEST(MemoryGraphTest, FromJson) {
   EXPECT_EQ(luffy.getMetadata()["bounty"], 3000000000);
 
   // Check edges
-  EXPECT_EQ(deserialized.getEdges().size(), 4);
+  EXPECT_EQ(deserialized.getEdges().size(), 5);
   EXPECT_TRUE(deserialized.hasEdge("luffy_zoro"));
   EXPECT_TRUE(deserialized.hasEdge("luffy_shanks"));
 
