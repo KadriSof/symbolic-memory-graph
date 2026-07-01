@@ -483,14 +483,9 @@ void applyDeltaBinary(MemoryGraph &graph,
   const uint8_t *data = deltaData.data();
   size_t size = deltaData.size();
 
-  bool isCompressed = false;
-  if (size > 2 && data[0] == 0x78) {
-    if (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C) {
-      isCompressed = true;
-    }
-  }
+  CompressionType compType = detectCompressionType(deltaData);
 
-  if (isCompressed) {
+  if (compType != CompressionType::NONE) {
     decompressed = decompress(deltaData);
     data = decompressed.data();
     size = decompressed.size();
