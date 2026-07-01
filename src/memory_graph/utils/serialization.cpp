@@ -10,7 +10,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
-
 #include <vector>
 #include <zconf.h>
 #include <zlib.h>
@@ -52,7 +51,61 @@ struct BinaryHeader {
   // Total header size: 24 bytes
   static constexpr size_t SIZE = 6 * sizeof(uint32_t);
 };
+
+// Helper Functions for Binary I/O
+void writeU32(std::vector<uint8_t> &output, uint32_t value) {
+  output.push_back(value & 0xFF);
+  output.push_back((value >> 8) & 0xFF);
+  output.push_back((value >> 16) & 0xFF);
+  output.push_back((value >> 24) & 0xFF);
+}
+
+uint32_t readU32(const std::uint8_t *rawData, size_t rawSize, size_t &offset) {
+  if (offset + 4 > rawSize) {
+    throw std::runtime_error(
+        "[serialization:readU32] Invalid binary data: unexpected EOF");
+  }
+
+  uint32_t value = static_cast<uint32_t>(rawData[offset]) |
+                   (static_cast<uint32_t>(rawData[offset + 1]) << 8) |
+                   (static_cast<uint32_t>(rawData[offset + 2]) << 16) |
+                   (static_cast<uint32_t>(rawData[offset + 3]) << 24);
+
+  offset += 4;
+  return value;
+}
+
+// Compression Detection
+CompressionType detectCompressionType(const std::vector<uint8_t> &data) {
+  if (data.size() < 2)
+    return CompressionType::NONE;
+
+  // Check for uncompressed MEMG magic
+  if (data.size() >= 4 && data[0] == 'M' && data[1] == 'E' && data[2] == 'M' &&
+      data[3] == 'G') {
+    return CompressionType::NONE;
+  }
+
+  // Check for ZLIB headers
+  if (data[0] == 0x78 && (data[1] == 0x01 || data[1] == 0x5E ||
+                          data[1] == 0x9C || data[1] == 0xDA)) {
+    return CompressionType::ZLIB;
+  }
+
+  // TODO: Add GZIP and LZ4 detection
+  // if (data[0] == 0x1F && data[1] == 0x8B) return CompressionType::GZIP;
+  // if (data.size() >= 4 && data[0] == 0x04 && data[1] == 0x22 && data[2] ==
+  // 0x4D && data[3] == 0x18) return CompressionType::LZ4;
+
+  return CompressionType::NONE;
+}
+
 } // namespace
+
+// Helper func for testing and debugging
+bool isCompressed(const std::vector<uint8_t> &data) {
+  return detectCompressionType(data) != CompressionType::NONE;
+}
 
 std::vector<uint8_t> toBinary(const MemoryGraph &graph,
                               const SerializationOptions &options) {
@@ -60,65 +113,56 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
   // serialization)
   nlohmann::json graphJson = graph.toJson();
   BinaryHeader header;
+  header.magic = MAGIC;
+  header.version = options.version;
+  header.flags = 0;
 
-  // 2. Build data buffer (JSON as string)
-  if (!options.include_nodes) {
+  // 2. Apply options to JSON and header
+  if (options.include_nodes) {
+    header.flags |= FLAG_HAS_NODES;
+    header.node_count = graph.getNodes().size();
+  } else {
     header.node_count = 0;
     if (graphJson.contains("nodes"))
       graphJson["nodes"] = nlohmann::json::array();
   }
-  if (!options.include_edges) {
+
+  if (options.include_edges) {
+    header.flags |= FLAG_HAS_EDGES;
+    header.edge_count = graph.getEdges().size();
+  } else {
     header.edge_count = 0;
     if (graphJson.contains("edges"))
       graphJson["edges"] = nlohmann::json::array();
   }
-  if (!options.include_metadata) {
+
+  if (options.include_metadata) {
+    header.flags |= FLAG_HAS_METADATA;
+  } else {
     if (graphJson.contains("metadata"))
       graphJson.erase("metadata");
   }
 
-  // Build data buffer (JSON as string)
+  // 3. Build data buffer (JSON as string)
   std::string jsonString = graphJson.dump();
   std::vector<uint8_t> data(jsonString.begin(), jsonString.end());
-
-  // 3. Build header
-  header.magic = MAGIC;
-  header.version = options.version;
-  header.flags = 0;
-  header.node_count = graph.getNodes().size();
-  header.edge_count = graph.getEdges().size();
   header.data_size = data.size();
-
-  if (options.include_metadata)
-    header.flags |= FLAG_HAS_METADATA;
-  if (options.include_nodes)
-    header.flags |= FLAG_HAS_NODES;
-  if (options.include_edges)
-    header.flags |= FLAG_HAS_EDGES;
 
   // 4. Assembke binary output
   std::vector<uint8_t> output;
   output.reserve(BinaryHeader::SIZE + data.size());
 
-  // Write header
-  auto writeU32 = [&output](uint32_t value) {
-    output.push_back(value & 0XFF);
-    output.push_back((value >> 8) & 0XFF);
-    output.push_back((value >> 16) & 0XFF);
-    output.push_back((value >> 24) & 0XFF);
-  };
+  writeU32(output, header.magic);
+  writeU32(output, header.version);
+  writeU32(output, header.flags);
+  writeU32(output, header.node_count);
+  writeU32(output, header.edge_count);
+  writeU32(output, header.data_size);
 
-  writeU32(header.magic);
-  writeU32(header.version);
-  writeU32(header.flags);
-  writeU32(header.node_count);
-  writeU32(header.edge_count);
-  writeU32(header.data_size);
-
-  // Write data
+  // 5. Write data
   output.insert(output.end(), data.begin(), data.end());
 
-  // 5. Compress if requested
+  // 6. Compress if requested
   if (options.compression != CompressionType::NONE) {
     return compress(output, options.compression);
   }
@@ -126,57 +170,14 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
   return output;
 }
 
-// Helper func for testing and debuging
-bool isCompressed(const std::vector<uint8_t> &data) {
-  if (data.size() < 2)
-    return false;
-
-  // Check for zlib header
-  if (data[0] == 0x78 &&
-      (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C)) {
-    return true;
-  }
-
-  // Check for gzip header (we will add this later)
-  // if (data.size() >= 2 && data[0] == 0x1F && data[1] == 0x8B) {
-  //   return true;
-  //   }
-
-  return false;
-}
-
 MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
-  // 1. Decompress if needed
   std::vector<uint8_t> decompressedData;
   const uint8_t *rawData = data.data();
   size_t rawSize = data.size();
 
-  // Check if data is compressed
-  bool isCompressed = false;
-
-  // Method 1: Check for zlib header (0x78 0x01, 0x78 0x5E, 0x78 0x9C, 0x78
-  // 0xDA)
-  if (rawSize > 2 && rawData[0] == 0x78) {
-    if (rawData[1] == 0x01 || rawData[1] == 0x5E || rawData[1] == 0x9C ||
-        rawData[1] == 0xDA) {
-      isCompressed = true;
-    }
-  }
-
-  // Method 2: Check for gzip header (0x1F 0x8B)
-  // if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
-  //     rawData[1] == 0x8B) {
-  //   isCompressed = true;
-  // }
-
-  // Method 3: Check for magic bytes (if present, it's uncompressed)
-  if (rawSize > 4 && rawData[0] == 'M' && rawData[1] == 'E' &&
-      rawData[2] == 'M' && rawData[3] == 'G') {
-    isCompressed = false;
-  }
-
-  // Decompress
-  if (isCompressed) {
+  // 1. Check if data is compressed and decompress
+  CompressionType compType = detectCompressionType(data);
+  if (compType != CompressionType::NONE) {
     try {
       decompressedData = decompress(data);
       rawData = decompressedData.data();
@@ -194,27 +195,13 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
         "[serialization:fromBinary] Invalid binary data: too small");
   }
 
-  auto readU32 = [&rawData, &rawSize](size_t &offset) -> uint32_t {
-    if (offset + 4 > rawSize) {
-      throw std::runtime_error(
-          "[serialization:fromBinary] Invalid binary data: unexpected EOF");
-    }
-    uint32_t value = static_cast<uint32_t>(rawData[offset]) |
-                     (static_cast<uint32_t>(rawData[offset + 1]) << 8) |
-                     (static_cast<uint32_t>(rawData[offset + 2]) << 16) |
-                     (static_cast<uint32_t>(rawData[offset + 3]) << 24);
-
-    offset += 4;
-    return value;
-  };
-
   size_t offset = 0;
-  uint32_t magic = readU32(offset);
-  uint32_t version = readU32(offset);
-  uint32_t flags = readU32(offset);
-  uint32_t node_count = readU32(offset);
-  uint32_t edge_count = readU32(offset);
-  uint32_t data_size = readU32(offset);
+  uint32_t magic = readU32(rawData, rawSize, offset);
+  uint32_t version = readU32(rawData, rawSize, offset);
+  uint32_t flags = readU32(rawData, rawSize, offset);
+  uint32_t node_count = readU32(rawData, rawSize, offset);
+  uint32_t edge_count = readU32(rawData, rawSize, offset);
+  uint32_t data_size = readU32(rawData, rawSize, offset);
 
   // 3. Validate
   if (magic != MAGIC) {
@@ -226,11 +213,6 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
     throw std::runtime_error("Version mismatch: expected " +
                              std::to_string(SERIALIZATION_VERSION) + ", got " +
                              std::to_string(version));
-  }
-
-  if (offset > rawSize) {
-    throw std::runtime_error("[serialization:fromBinary] Invalid binary data: "
-                             "header offset exceeds data size");
   }
 
   if (data_size > rawSize - offset) {
@@ -341,7 +323,6 @@ nlohmann::json computeDelta(const MemoryGraph &before,
     if (afterEdges.find(id) == afterEdges.end()) {
       removedEdges.push_back(id);
     }
-    removedEdges.push_back(id);
   }
 
   // Check for modified edges
@@ -525,10 +506,10 @@ std::vector<uint8_t> compress(const std::vector<uint8_t> &data,
   // TODO: Implement the rest of compression types later (with proper wrappers
   // and error handling)
   if (type == CompressionType::ZLIB) {
-    uLongf conpressedSize = compressBound(data.size());
-    std::vector<uint8_t> result(conpressedSize);
+    uLongf compressedSize = compressBound(data.size());
+    std::vector<uint8_t> result(compressedSize);
 
-    int ret = compress2(result.data(), &conpressedSize, data.data(),
+    int ret = compress2(result.data(), &compressedSize, data.data(),
                         data.size(), Z_DEFAULT_COMPRESSION);
     if (ret != Z_OK) {
       throw std::runtime_error(
@@ -536,7 +517,7 @@ std::vector<uint8_t> compress(const std::vector<uint8_t> &data,
           std::to_string(ret));
     }
 
-    result.resize(conpressedSize);
+    result.resize(compressedSize);
     return result;
   }
 
@@ -598,19 +579,9 @@ static void parseAndValidateHeader(const std::vector<uint8_t> &data,
   const uint8_t *rawData = data.data();
   size_t rawSize = data.size();
 
-  // Check if compressed
-  bool isCompressed = false;
-  if (rawSize > 2 && data[0] == 0x78) {
-    if (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C) {
-      isCompressed = true;
-    }
-  }
-  // if (!isCompressed && rawSize > 2 && rawData[0] == 0x1F &&
-  //     rawData[1] == 0x8B) {
-  //   isCompressed = true;
-  // }
+  CompressionType compType = detectCompressionType(data);
 
-  if (isCompressed) {
+  if (compType != CompressionType::NONE) {
     decompressedData = decompress(data);
     rawData = decompressedData.data();
     rawSize = decompressedData.size();
@@ -623,26 +594,13 @@ static void parseAndValidateHeader(const std::vector<uint8_t> &data,
   }
 
   // 3. Read header fields
-  auto readU32 = [&rawData, &rawSize](size_t &offset) -> uint32_t {
-    if (offset + 4 > rawSize) {
-      throw std::runtime_error(
-          "[serialization:fromBinary] Invalid binary data: unexpected EOF");
-    }
-    uint32_t value = static_cast<uint32_t>(rawData[offset]) |
-                     (static_cast<uint32_t>(rawData[offset + 1]) << 8) |
-                     (static_cast<uint32_t>(rawData[offset + 2]) << 16) |
-                     (static_cast<uint32_t>(rawData[offset + 3]) << 24);
-    offset += 4;
-    return value;
-  };
-
   size_t offset = 0;
-  uint32_t magic = readU32(offset);
-  uint32_t version = readU32(offset);
-  uint32_t flags = readU32(offset);
-  uint32_t node_count = readU32(offset);
-  uint32_t edge_count = readU32(offset);
-  uint32_t data_size = readU32(offset);
+  uint32_t magic = readU32(rawData, rawSize, offset);
+  uint32_t version = readU32(rawData, rawSize, offset);
+  uint32_t flags = readU32(rawData, rawSize, offset);
+  uint32_t node_count = readU32(rawData, rawSize, offset);
+  uint32_t edge_count = readU32(rawData, rawSize, offset);
+  uint32_t data_size = readU32(rawData, rawSize, offset);
 
   // 4. Validate magic bytes first
   if (magic != MAGIC) {
