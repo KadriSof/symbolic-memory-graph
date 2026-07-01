@@ -4,9 +4,11 @@
 #include "memory_graph/utils/serialization.hpp"
 #include "test_utils.hpp"
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -296,4 +298,151 @@ TEST(SerializationTest, EdgeTypePreserved) {
   // Verify asymmetric connections are directed
   const auto &charlieConn = deserialized.getNode("charlie").getConnections();
   EXPECT_TRUE(charlieConn.empty()); // Charlie doesn't follow Alice back
+}
+
+TEST(SerializationTest, SerializationOptionsExcludeNodes) {
+  MemoryGraph original = createTestGraph();
+  SerializationOptions opts;
+  opts.include_nodes = false;
+
+  std::vector<uint8_t> binary = toBinary(original, opts);
+  MemoryGraph deserialized = fromBinary(binary);
+
+  // Node should be exclude, mate!
+  EXPECT_EQ(deserialized.getNodes().size(), 0);
+  // Edges and metadata should still be intact?
+  EXPECT_GT(deserialized.getEdges().size(), 0);
+  EXPECT_FALSE(deserialized.getMetadata().empty());
+}
+
+TEST(SerializationTest, SerializationOptionsExcludeEdges) {
+  MemoryGraph original = createTestGraph();
+  SerializationOptions opts;
+  opts.include_edges = false;
+
+  std::vector<uint8_t> binary = toBinary(original, opts);
+  MemoryGraph deserialized = fromBinary(binary);
+
+  // Edges should be exculded, cuhh!
+  EXPECT_EQ(deserialized.getEdges().size(), 0);
+  // Nodes and metadata should still be intact or I would spit in your general
+  // direction!
+  EXPECT_GT(deserialized.getNodes().size(), 0);
+  EXPECT_FALSE(deserialized.getMetadata().empty());
+}
+
+TEST(SerializationTest, ApplyDeltaPreservesEdgesOnNodeModification) {
+  MemoryGraph base = createTestGraph();
+
+  // 1. Verify Luffy has connections before we modify him
+  size_t originalConnectionCount =
+      base.getNode("luffy").getConnections().size();
+  EXPECT_GT(originalConnectionCount, 0);
+
+  // 2. Create a manual delta that ONLY modifies Luffy's metadata
+  nlohmann::json delta;
+  nlohmann::json modifiedLuffyJson = base.getNode("luffy").toJson();
+  modifiedLuffyJson["metadata"]["bounty"] = 0; // Sorry, Oda Sensei..
+
+  delta["modified_nodes"] = nlohmann::json::object();
+  delta["modified_nodes"]["luffy"] = modifiedLuffyJson;
+
+  // 3. Apply the delta
+  applyDelta(base, delta);
+
+  // 4. Check luffy's connections (should StILL be there!)
+  size_t newConnectionCount = base.getNode("luffy").getConnections().size();
+  EXPECT_EQ(originalConnectionCount, newConnectionCount);
+}
+
+TEST(SerializationTest, ComputeDeltaCorrectlyIdentifiesRemoveEdges) {
+  MemoryGraph before = createTestGraph();
+  MemoryGraph after = createTestGraph();
+
+  // Get an existing edge ID to remove
+  std::string edgeToRemove = before.getEdges().front().getId();
+
+  // Remove it from the 'after' graph
+  after.removeEdge(edgeToRemove);
+
+  // Compute delta
+  nlohmann::json delta = computeDelta(before, after);
+
+  // The delta should contain exactly ONE removed edge
+  EXPECT_TRUE(delta.contains("removed_edges"));
+  EXPECT_EQ(delta["removed_edges"].size(), 1);
+  EXPECT_EQ(delta["removed_edges"][0], edgeToRemove);
+}
+
+TEST(SerializationTest, ApplyDeltaBinaryRoundTrip) {
+  MemoryGraph base = createTestGraph();
+  MemoryGraph target = createModifiedGraph();
+
+  // Create a standard JSON delta
+  nlohmann::json deltaJson = computeDelta(base, target);
+  std::string deltaStr = deltaJson.dump();
+  std::vector<uint8_t> deltaData(deltaStr.begin(), deltaStr.end());
+
+  // Test 1: Uncompressed binary delta
+  MemoryGraph baseCopy1 = createTestGraph();
+  applyDeltaBinary(baseCopy1, deltaData);
+  EXPECT_EQ(baseCopy1.getNodes().size(), target.getNodes().size());
+  EXPECT_EQ(baseCopy1.getEdges().size(), target.getEdges().size());
+
+  // Test 2: Compressed (ZLIB) binary delta
+  std::vector<uint8_t> compressedDelta =
+      compress(deltaData, CompressionType::ZLIB);
+  MemoryGraph baseCopy2 = createTestGraph();
+  applyDeltaBinary(baseCopy2, compressedDelta);
+  EXPECT_EQ(baseCopy2.getNodes().size(), target.getNodes().size());
+  EXPECT_EQ(baseCopy2.getEdges().size(), target.getEdges().size());
+}
+
+TEST(SerializationTest, FromBinaryInvalidMagicBytes) {
+  // Create 24 bytes of garbage data (enough to pass the size check, but fail
+  // magic check)
+  std::vector<uint8_t> garbage(24, 0x00);
+  EXPECT_THROW(fromBinary(garbage), std::runtime_error);
+}
+
+TEST(SerializationTest, FromBinaryTruncatedData) {
+  MemoryGraph original = createTestGraph();
+  std::vector<uint8_t> binary = toBinary(original);
+
+  // Truncate it to just 10 bytes (less than 24-bytes header size)
+  std::vector<uint8_t> truncated(binary.begin(), binary.begin() + 10);
+  EXPECT_THROW(fromBinary(truncated), std::runtime_error);
+}
+
+TEST(SerializationTest, EmptyGraphRoundTrip) {
+  MemoryGraph emptyGraph;
+
+  // Test uncompressed
+  std::vector<uint8_t> binary = toBinary(emptyGraph);
+  MemoryGraph deserialized = fromBinary(binary);
+  EXPECT_EQ(deserialized.getNodes().size(), 0);
+  EXPECT_EQ(deserialized.getEdges().size(), 0);
+
+  // Test compressed
+  SerializationOptions opts;
+  opts.compression = CompressionType::ZLIB;
+  std::vector<uint8_t> compressedBinary = toBinary(emptyGraph, opts);
+  MemoryGraph deserializedCompressed = fromBinary(compressedBinary);
+  EXPECT_EQ(deserializedCompressed.getNodes().size(), 0);
+  EXPECT_EQ(deserializedCompressed.getEdges().size(), 0);
+}
+
+TEST(SerializationTest, HeaderValidationHelpers) {
+  MemoryGraph original = createTestGraph();
+  std::vector<uint8_t> binary = toBinary(original);
+
+  // Valid format checks
+  EXPECT_TRUE(isValidFormat(binary));
+  EXPECT_EQ(getVersion(binary), SERIALIZATION_VERSION);
+
+  // Corrupt the magic bytes (oh, no! not the magic bytes!!)
+  std::vector<uint8_t> corrupted = binary;
+  corrupted[0] = 'X';
+  EXPECT_FALSE(isValidFormat(corrupted));
+  EXPECT_THROW(getVersion(corrupted), std::runtime_error);
 }
