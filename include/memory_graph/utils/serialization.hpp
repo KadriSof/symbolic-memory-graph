@@ -37,6 +37,7 @@ struct SerializationOptions {
   bool include_nodes = true;
   bool include_edges = true;
   CompressionType compression = CompressionType::NONE;
+
   uint32_t version = SERIALIZATION_VERSION;
 };
 
