@@ -267,6 +267,16 @@ std::vector<std::string> topologicalSort(const MemoryGraph &graph) {
     }
   }
 
+  // Verify all nodes were processed (for diconnected nodes or cycles)
+  if (result.size() != graph.getNodes().size()) {
+    for (const auto &node : graph.getNodes()) {
+      if (std::find(result.begin(), result.end(), node.getId()) ==
+          result.end()) {
+        result.push_back(node.getId());
+      }
+    }
+  }
+
   return result;
 }
 
