@@ -550,8 +550,13 @@ std::vector<uint8_t> decompress(const std::vector<uint8_t> &data) {
   std::vector<uint8_t> result(uncompressedSize);
 
   int ret;
+  const size_t MAX_UNCOMPRESSED_SIZE = 100 * 1024 * 1024;
   while ((ret = uncompress(result.data(), &uncompressedSize, data.data(),
                            data.size())) == Z_BUF_ERROR) {
+    if (uncompressedSize > MAX_UNCOMPRESSED_SIZE) {
+      throw std::runtime_error("[serialization:decompress] Uncompressed size "
+                               "exceeds maximum allowed");
+    }
     uncompressedSize *= 2;
     result.resize(uncompressedSize);
   }
