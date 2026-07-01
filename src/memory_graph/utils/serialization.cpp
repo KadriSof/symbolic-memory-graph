@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 #include <zconf.h>
 #include <zlib.h>
@@ -409,10 +410,20 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
       if (graph.hasNode(nodeId)) {
         // Save the actual edge objects before we delete the node
         std::vector<Edge> incidentEdges;
-        auto connectionIds = graph.getNode(nodeId).getConnections();
-        for (const auto &edgeId : connectionIds) {
-          if (graph.hasEdge(edgeId)) {
-            incidentEdges.push_back(graph.getEdge(edgeId));
+        for (const auto &edge : graph.getEdges()) {
+          if (std::holds_alternative<SymmetricConnections>(
+                  edge.getConnections())) {
+            const auto &conn_set =
+                std::get<SymmetricConnections>(edge.getConnections());
+            if (conn_set.find(nodeId) != conn_set.end()) {
+              incidentEdges.push_back(edge);
+            }
+          } else {
+            const auto &conn_pair =
+                std::get<AsymmetricConnections>(edge.getConnections());
+            if (conn_pair.first == nodeId || conn_pair.second == nodeId) {
+              incidentEdges.push_back(edge);
+            }
           }
         }
 
