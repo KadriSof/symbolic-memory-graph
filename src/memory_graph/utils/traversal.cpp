@@ -190,42 +190,33 @@ std::vector<std::vector<std::string>> findAllPaths(const MemoryGraph &graph,
 
 // Graph Properties
 bool hasCycle(const MemoryGraph &graph) {
+  const auto &adjList = graph.getAdjacencyList();
+
   std::unordered_set<std::string> visited;
   std::unordered_set<std::string> recursionStack;
-
-  // Helper: Check if an edge is symmetric (bidirectional)
-  auto isSymmetricConnection = [&](const std::string &from,
-                                   const std::string &to) -> bool {
-    for (const auto &edge : graph.getEdges()) {
-      if (std::holds_alternative<SymmetricConnections>(edge.getConnections())) {
-        const auto &conn_set =
-            std::get<SymmetricConnections>(edge.getConnections());
-        if (conn_set.find(from) != conn_set.end() &&
-            conn_set.find(to) != conn_set.end()) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  };
 
   std::function<bool(const std::string &, const std::string &)> dfsCycle =
       [&](const std::string &nodeId, const std::string &parent) -> bool {
     visited.insert(nodeId);
     recursionStack.insert(nodeId);
 
-    for (const auto &neighborId : graph.getNode(nodeId).getConnections()) {
-      if (isSymmetricConnection(nodeId, neighborId) && neighborId == parent) {
+    auto it = adjList.find(nodeId);
+    if (it == adjList.end()) {
+      recursionStack.erase(nodeId);
+      return false;
+    }
+
+    for (const auto &[neighborId, isSymmetric] : it->second) {
+      // Skip parent only if edge is symmetric
+      if (isSymmetric && neighborId == parent)
         continue;
-      }
 
       if (visited.find(neighborId) == visited.end()) {
         if (dfsCycle(neighborId, nodeId)) {
           return true;
         }
       } else if (recursionStack.find(neighborId) != recursionStack.end()) {
-        return true; // found a back edge
+        return true; // cycle detected
       }
     }
 
@@ -234,9 +225,9 @@ bool hasCycle(const MemoryGraph &graph) {
   };
 
   // Check all nodes
-  for (const auto &node : graph.getNodes()) {
-    if (visited.find(node.getId()) == visited.end()) {
-      if (dfsCycle(node.getId(), "")) {
+  for (const auto &[nodeId, _] : adjList) {
+    if (visited.find(nodeId) == visited.end()) {
+      if (dfsCycle(nodeId, "")) {
         return true;
       }
     }
