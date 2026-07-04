@@ -495,7 +495,7 @@ std::vector<std::string> findNodesByMetadata(const MemoryGraph &graph,
 }
 
 // Context Window Utilities (for LLMs)
-nlohmann::json getContextWidnow(const MemoryGraph &graph,
+nlohmann::json getContextWindow(const MemoryGraph &graph,
                                 const std::string &center, size_t maxTokens,
                                 float minRelevance) {
   if (!graph.hasNode(center)) {

@@ -7,6 +7,7 @@ add_executable(test_memory_graph
   test_edge.cpp
   test_memory_graph.cpp
   test_serialization.cpp
+  test_traversal.cpp
 )
 
 # Link to the library and GTest
