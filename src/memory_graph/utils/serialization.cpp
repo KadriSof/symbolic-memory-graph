@@ -171,24 +171,6 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
   return output;
 }
 
-// Helper func for testing and debuging
-bool isCompressed(const std::vector<uint8_t> &data) {
-  if (data.size() < 2)
-    return false;
-
-  // Check for zlib header
-  if (data[0] == 0x78 &&
-      (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C)) {
-    return true;
-  }
-
-  // Check for gzip header
-  if (data.size() >= 2 && data[0] == 0x1F && data[1] == 0x8B) {
-    return true;
-  }
-
-  return false;
-}
 MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   std::vector<uint8_t> decompressedData;
   const uint8_t *rawData = data.data();
@@ -299,14 +281,6 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   for (const auto &id : afterNodes) {
     if (beforeNodes.find(id) == beforeNodes.end()) {
       addedNodes[id] = after.getNode(id).toJson(); // Full node data
-    }
-  }
-
-  // Find removed nodes: store IDs only
-  std::vector<std::string> removedNodes;
-  for (const auto &id : beforeNodes) {
-    if (afterNodes.find(id) == afterNodes.end()) {
-      removedNodes.push_back(id);
     }
   }
 
