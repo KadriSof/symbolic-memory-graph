@@ -140,7 +140,7 @@ std::vector<std::string> findNodesByMetadata(const MemoryGraph &graph,
  * @param minRelevance Minimum relevance score
  * @return JSON with nodes and edges within the context window
  */
-nlohmann::json getContextWidnow(const MemoryGraph &graph,
+nlohmann::json getContextWindow(const MemoryGraph &graph,
                                 const std::string &center,
                                 size_t maxTokens = 4096,
                                 float minRelevance = 0.5f);
