@@ -419,11 +419,21 @@ subgraphByPredicate(const MemoryGraph &graph,
 
   // Include neighbors if requested
   if (includeNeighbors) {
+    // 1. Include outgoing neighbors
     for (const auto &id : selectedNodes) {
       auto it = adjList.find(id);
       if (it != adjList.end()) {
         for (const auto &[neighborId, isSymmetric] : it->second) {
           finalNodes.insert(neighborId);
+        }
+      }
+
+      // 2. Include incoming neighbors (nodes that have this node as neighbor)
+      for (const auto &[nodeId, neighbors] : adjList) {
+        for (const auto &[neighborId, isSymmetric] : neighbors) {
+          if (neighborId == id) {
+            finalNodes.insert(nodeId);
+          }
         }
       }
     }

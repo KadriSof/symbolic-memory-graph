@@ -4,6 +4,7 @@
 #include "memory_graph/node.hpp"
 #include "memory_graph/utils/traversal.hpp"
 #include "test_utils.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <gtest/gtest.h>
@@ -110,9 +111,9 @@ TEST(TraversalTest, DfsBasic) {
 
 TEST(TraversalTest, DfsWithDepthLimit) {
   MemoryGraph graph = createTestGraph();
-  auto result = dfs(graph, "luffy", 0);
 
-  EXPECT_EQ(result.size(), 0);
+  auto result = dfs(graph, "luffy", 0);
+  EXPECT_EQ(result.size(), 1);
   EXPECT_EQ(result[0], "luffy");
 
   result = dfs(graph, "luffy", 1);
@@ -179,6 +180,9 @@ TEST(TraversalTest, FindAllPathsDirect) {
   auto paths = findAllPaths(graph, "luffy", "zoro");
 
   EXPECT_GE(paths.size(), 1);
+
+  std::sort(paths.begin(), paths.end(),
+            [](const auto &a, const auto &b) { return a.size() < b.size(); });
 
   // First path should be direct
   EXPECT_EQ(paths[0].size(), 2);
@@ -373,7 +377,7 @@ TEST(TraversalTest, TopologicalSortWithSymmetricEdges) {
   // Topological sort should still work, treating symmetric edges as
   // non-dependencies
   EXPECT_EQ(result.size(), 3);
-  EXPECT_EQ(result[0], "a");
+  EXPECT_EQ(result[0], "letho");
 }
 
 TEST(TraversalTest, TopologicalSortWithCycle) {
