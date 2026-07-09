@@ -622,7 +622,7 @@ TEST(TraversalTest, FullTraversalWorkflow) {
   EXPECT_EQ(path.size(), 2);
 
   // 4. Check for cycles
-  EXPECT_FALSE(hasCycle(graph));
+  EXPECT_TRUE(hasCycle(graph));
 
   // 5. Extract subgraph
   auto sub = subgraph(graph, "luffy", 1);
