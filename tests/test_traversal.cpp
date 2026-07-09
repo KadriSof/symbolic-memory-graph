@@ -642,11 +642,7 @@ TEST(TraversalTest, AdjacencyListCacheConsistency) {
 
   // First call builds cache
   const auto &adj1 = graph.getAdjacencyList();
-  EXPECT_FALSE(
-      graph
-          .isAdjacencyCacheValid()); // Actually, it should be valid after build
-  // Wait, isAdjacencyCacheValid() returns !adjacencyDirty_
-  // After first call, cache is built and should be valid
+  EXPECT_TRUE(graph.isAdjacencyCacheValid());
 
   // Second call should use cache
   const auto &adj2 = graph.getAdjacencyList();
