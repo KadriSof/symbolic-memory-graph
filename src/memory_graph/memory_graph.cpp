@@ -1,11 +1,16 @@
 #include "memory_graph/memory_graph.hpp"
 #include "memory_graph/edge.hpp"
 #include "memory_graph/exceptions.hpp"
+#include "memory_graph/node.hpp"
 #include "nlohmann/json.hpp"
+#include <cstddef>
 #include <queue>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace memory_graph {
 
@@ -18,6 +23,7 @@ void MemoryGraph::addNode(const Node &node) {
                            "' already exists.");
   }
   nodes_.emplace(node.getId(), node);
+  invalidateCache();
 }
 
 bool MemoryGraph::hasNode(const std::string &nodeId) const {
@@ -52,6 +58,7 @@ void MemoryGraph::removeNode(const std::string &nodeId) {
   }
 
   nodes_.erase(nodeId);
+  invalidateCache();
 }
 
 const Node &MemoryGraph::getNode(const std::string &nodeId) const {
@@ -117,6 +124,7 @@ void MemoryGraph::addEdge(const Edge &edge) {
   }
 
   edges_.emplace(edge.getId(), edge);
+  invalidateCache();
 }
 
 bool MemoryGraph::hasEdge(const std::string &edgeId) const {
@@ -144,6 +152,7 @@ void MemoryGraph::removeEdge(const std::string &edgeId) {
   }
 
   edges_.erase(edgeId);
+  invalidateCache();
 }
 
 const Edge &MemoryGraph::getEdge(const std::string &edgeId) const {
@@ -247,6 +256,57 @@ std::string MemoryGraph::findEdgeId(const std::string &nodeId1,
 
   throw EdgeNotFoundError("No edge found between '" + nodeId1 + "' and '" +
                           nodeId2 + "'.");
+}
+
+void MemoryGraph::buildAdjacencyCache() const {
+  // Clear existing cache
+  adjacencyCache_.clear();
+
+  // Build adjacency list from all edges
+  for (const auto &[edgeId, edge] : edges_) {
+    if (edge.getType() == EdgeType::SYMMETRIC) {
+      // Bidirectional connections between all pairs
+      const auto &conn_set =
+          std::get<SymmetricConnections>(edge.getConnections());
+      // Convert set to vector for ordered pair generation
+      std::vector<std::string> nodes(conn_set.begin(), conn_set.end());
+
+      // Create bidirectional connections between every pair in the set
+      for (size_t i = 0; i < nodes.size(); ++i) {
+        for (size_t j = i + 1; j < nodes.size(); ++j) {
+          // Add both directions with isSymmetric = true
+          adjacencyCache_[nodes[i]].emplace_back(nodes[j], true);
+          adjacencyCache_[nodes[j]].emplace_back(nodes[i], true);
+        }
+      }
+    } else {
+      // Directed connection
+      const auto &conn_pair =
+          std::get<AsymmetricConnections>(edge.getConnections());
+      // Add one direction with isSymmetric = false
+      adjacencyCache_[conn_pair.first].emplace_back(conn_pair.second, false);
+    }
+  }
+
+  // Ensure all nodes exist in adjacency list (even isolated ones)
+  for (const auto &[nodeId, node] : nodes_) {
+    if (adjacencyCache_.find(nodeId) == adjacencyCache_.end()) {
+      adjacencyCache_[nodeId] = {}; // Empty adjacency list
+    }
+  }
+
+  // Mark cache as clear
+  adjacencyDirty_ = false;
+}
+
+const std::unordered_map<std::string,
+                         std::vector<std::pair<std::string, bool>>> &
+MemoryGraph::getAdjacencyList() const {
+  if (adjacencyDirty_) {
+    buildAdjacencyCache();
+  }
+
+  return adjacencyCache_;
 }
 
 nlohmann::json MemoryGraph::toJson() const {
