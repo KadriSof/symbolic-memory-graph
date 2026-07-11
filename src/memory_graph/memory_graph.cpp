@@ -173,7 +173,7 @@ void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
 
   // 5. Create the group edge (symmetric by definition)
   SymmetricConnections conn(nodeIds);
-  Edge groupEdge(id, label, EdgeType::SYMMETRIC, conn, weight, metadata);
+  Edge groupEdge(id, label, EdgeType::SYMMETRIC, conn, weight, metadata, true);
 
   // 6. Add bidirectional connections between all pairs
   std::vector<std::string> nodes(nodeIds.begin(), nodeIds.end());
@@ -204,6 +204,7 @@ void MemoryGraph::removeEdge(const std::string &edgeId) {
     const auto &conn_set =
         std::get<SymmetricConnections>(edge.getConnections());
 
+    // Remove all pairs in the set
     std::vector<std::string> nodes(conn_set.begin(), conn_set.end());
     for (size_t i = 0; i < nodes.size(); ++i) {
       for (size_t j = i + 1; j < nodes.size(); ++j) {
@@ -240,12 +241,8 @@ std::vector<Edge> MemoryGraph::getEdges() const {
 std::vector<Edge> MemoryGraph::getGroupEdges() const {
   std::vector<Edge> result;
   for (const auto &[id, edge] : edges_) {
-    if (edge.getType() == EdgeType::SYMMETRIC) {
-      const auto &conn_set =
-          std::get<SymmetricConnections>(edge.getConnections());
-      if (conn_set.size() > 2) {
-        result.push_back(edge);
-      }
+    if (edge.isGroupEdge()) {
+      result.push_back(edge);
     }
   }
 

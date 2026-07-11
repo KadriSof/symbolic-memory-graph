@@ -1,14 +1,17 @@
 #include "memory_graph/edge.hpp"
 #include "nlohmann/json.hpp"
+#include <stdexcept>
+#include <string>
+#include <variant>
 #include <vector>
 
 namespace memory_graph {
 
 Edge::Edge(const std::string &id, const std::string &label, EdgeType type,
            const Connections &connections, float weight,
-           const nlohmann::json &metadata)
+           const nlohmann::json &metadata, bool isGroupEdge)
     : id_(id), label_(label), type_(type), connections_(connections),
-      weight_(weight), metadata_(metadata) {
+      weight_(weight), metadata_(metadata), isGroupEdge_(isGroupEdge) {
   validateWeight(weight);
 }
 
@@ -46,6 +49,7 @@ nlohmann::json Edge::toJson() const {
       (type_ == EdgeType::SYMMETRIC) ? "SYMMETRIC" : "ASYMMETRIC";
   edgeJson["weight"] = weight_;
   edgeJson["metadata"] = metadata_;
+  edgeJson["is_group_edge"] = isGroupEdge_;
 
   // Serialize connections
   if (std::holds_alternative<SymmetricConnections>(connections_)) {
@@ -84,8 +88,10 @@ Edge Edge::fromJson(const nlohmann::json &edgeJson) {
     connections = AsymmetricConnections(source, target);
   }
 
+  bool isGroupEdge = edgeJson.value("is_group_edge", false);
+
   return Edge(edgeJson.at("id").get<std::string>(),
               edgeJson.at("label").get<std::string>(), type, connections,
-              weight, metadata);
+              weight, metadata, isGroupEdge);
 }
 } // namespace memory_graph
