@@ -55,7 +55,7 @@ void MemoryGraph::removeNode(const std::string &nodeId) {
   }
 
   for (const auto &edgeId : edgesToRemove) {
-    removeEdge(edgeId);
+    edges_.erase(edgeId);
   }
 
   nodes_.erase(nodeId);
@@ -102,13 +102,6 @@ void MemoryGraph::addEdge(const Edge &edge) {
       }
     }
 
-    // Update: add bidirectional connections
-    auto it = conn_set.begin();
-    std::string node1 = *it;
-    std::string node2 = *(++it);
-    nodes_.at(node1).addConnection(node2);
-    nodes_.at(node2).addConnection(node1);
-
     // Handle asymetric connections
   } else {
     const auto &conn_pair =
@@ -119,9 +112,6 @@ void MemoryGraph::addEdge(const Edge &edge) {
       throw InvalidConnectionError(
           !hasNode(conn_pair.first) ? conn_pair.first : conn_pair.second);
     }
-
-    // Update: add unidirectional connection
-    nodes_.at(conn_pair.first).addConnection(conn_pair.second);
   }
 
   edges_.emplace(edge.getId(), edge);
@@ -175,16 +165,7 @@ void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
   SymmetricConnections conn(nodeIds);
   Edge groupEdge(id, label, EdgeType::SYMMETRIC, conn, weight, metadata, true);
 
-  // 6. Add bidirectional connections between all pairs
-  std::vector<std::string> nodes(nodeIds.begin(), nodeIds.end());
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    for (size_t j = i + 1; j < nodes.size(); ++j) {
-      nodes_.at(nodes[i]).addConnection(nodes[j]);
-      nodes_.at(nodes[j]).addConnection(nodes[i]);
-    }
-  }
-
-  // 7. Store the edge
+  // 6. Store the edge
   edges_.emplace(id, groupEdge);
 
   invalidateCache();
@@ -197,26 +178,6 @@ bool MemoryGraph::hasEdge(const std::string &edgeId) const {
 void MemoryGraph::removeEdge(const std::string &edgeId) {
   if (!hasEdge(edgeId)) {
     throw EdgeNotFoundError(edgeId);
-  }
-
-  const Edge &edge = edges_.at(edgeId);
-  if (edge.getType() == EdgeType::SYMMETRIC) {
-    const auto &conn_set =
-        std::get<SymmetricConnections>(edge.getConnections());
-
-    // Remove all pairs in the set
-    std::vector<std::string> nodes(conn_set.begin(), conn_set.end());
-    for (size_t i = 0; i < nodes.size(); ++i) {
-      for (size_t j = i + 1; j < nodes.size(); ++j) {
-        nodes_.at(nodes[i]).removeConnection(nodes[j]);
-        nodes_.at(nodes[j]).removeConnection(nodes[i]);
-      }
-    }
-
-  } else {
-    const auto &conn_pair =
-        std::get<AsymmetricConnections>(edge.getConnections());
-    nodes_.at(conn_pair.first).removeConnection(conn_pair.second);
   }
 
   edges_.erase(edgeId);
@@ -254,10 +215,16 @@ std::vector<Node> MemoryGraph::getNeighbors(const std::string &nodeId) const {
     throw NodeNotFoundError(nodeId);
   }
 
+  const auto &adjList = getAdjacencyList();
   std::vector<Node> neighbors;
-  for (const auto &neighborId : nodes_.at(nodeId).getConnections()) {
-    neighbors.push_back(nodes_.at(neighborId));
+
+  auto it = adjList.find(nodeId);
+  if (it != adjList.end()) {
+    for (const auto &[neighborId, isSymmetric] : it->second) {
+      neighbors.push_back(nodes_.at(neighborId));
+    }
   }
+
   return neighbors;
 }
 
@@ -286,6 +253,8 @@ nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
     throw NodeNotFoundError(nodeId);
   }
 
+  const auto &adjList = getAdjacencyList();
+
   nlohmann::json result;
   std::unordered_set<std::string> visited;
   std::queue<std::pair<std::string, int>> queue; // (node_id, depth)
@@ -307,8 +276,12 @@ nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
 
     visited.insert(currentId);
 
+    auto it = adjList.find(currentId);
+    if (it == adjList.end())
+      continue;
+
     // Explore neighbors
-    for (const auto &neighborId : nodes_.at(currentId).getConnections()) {
+    for (const auto &[neighborId, isSymmetric] : it->second) {
       // Find the edge between currentId and neighborId
       float edgeWeight = 1.0f; // Default weight
       try {
