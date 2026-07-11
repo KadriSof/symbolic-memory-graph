@@ -269,9 +269,10 @@ MemoryGraph::getGroupMembers(const std::string &groupId) const {
   }
 
   const Edge &edge = getEdge(groupId);
-  if (edge.getType() != EdgeType::SYMMETRIC) {
+
+  if (!edge.isGroupEdge()) {
     throw std::invalid_argument("[MemoryGraph:getGroupMembers] Edge '" +
-                                groupId + "' is not symmetric/group edge");
+                                groupId + "' is not a group edge");
   }
 
   const auto &conn_set = std::get<SymmetricConnections>(edge.getConnections());
