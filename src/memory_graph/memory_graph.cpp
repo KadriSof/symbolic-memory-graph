@@ -89,7 +89,7 @@ void MemoryGraph::addEdge(const Edge &edge) {
         std::get<SymmetricConnections>(edge.getConnections());
 
     // Validate: must have exactly 2 nodes
-    if (conn_set.size() < 2) {
+    if (conn_set.size() != 2) {
       throw InvalidConnectionError(
           "Symmetric connection requires exactly 2 nodes, got " +
           std::to_string(conn_set.size()));
@@ -102,6 +102,12 @@ void MemoryGraph::addEdge(const Edge &edge) {
       }
     }
 
+    auto it = conn_set.begin();
+    std::string node1 = *it;
+    std::string node2 = *(++it);
+    nodes_.at(node1).addConnection(node2);
+    nodes_.at(node2).addConnection(node1);
+
     // Handle asymetric connections
   } else {
     const auto &conn_pair =
@@ -112,6 +118,8 @@ void MemoryGraph::addEdge(const Edge &edge) {
       throw InvalidConnectionError(
           !hasNode(conn_pair.first) ? conn_pair.first : conn_pair.second);
     }
+
+    nodes_.at(conn_pair.first).addConnection(conn_pair.second);
   }
 
   edges_.emplace(edge.getId(), edge);
@@ -137,8 +145,7 @@ void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
   // 3. Validate all nodes exists
   for (const auto &nodeId : nodeIds) {
     if (!hasNode(nodeId)) {
-      throw InvalidConnectionError("[MemoryGraph:addGroupEdge] Node with ID '" +
-                                   nodeId + "' does not exist");
+      throw InvalidConnectionError(nodeId);
     }
   }
 
@@ -155,7 +162,7 @@ void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
     }
   }
 
-  // 4. Validate weight
+  // 5. Validate weight
   if (weight < 0.0f || weight > 1.0f) {
     throw std::invalid_argument("[MemoryGraph:addGroupEdge] Group edge weight "
                                 "must be between 0.0 and 1.0");
@@ -164,6 +171,15 @@ void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
   // 5. Create the group edge (symmetric by definition)
   SymmetricConnections conn(nodeIds);
   Edge groupEdge(id, label, EdgeType::SYMMETRIC, conn, weight, metadata, true);
+
+  // This ensures Node::connections_ is populated for serialization
+  std::vector<std::string> nodes(nodeIds.begin(), nodeIds.end());
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    for (size_t j = i + 1; j < nodes.size(); ++j) {
+      nodes_.at(nodes[i]).addConnection(nodes[j]);
+      nodes_.at(nodes[j]).addConnection(nodes[i]);
+    }
+  }
 
   // 6. Store the edge
   edges_.emplace(id, groupEdge);
@@ -178,6 +194,24 @@ bool MemoryGraph::hasEdge(const std::string &edgeId) const {
 void MemoryGraph::removeEdge(const std::string &edgeId) {
   if (!hasEdge(edgeId)) {
     throw EdgeNotFoundError(edgeId);
+  }
+
+  const Edge &edge = edges_.at(edgeId);
+  if (edge.getType() == EdgeType::SYMMETRIC) {
+    const auto &conn_set =
+        std::get<SymmetricConnections>(edge.getConnections());
+
+    std::vector<std::string> nodes(conn_set.begin(), conn_set.end());
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      for (size_t j = i + 1; j < nodes.size(); ++j) {
+        nodes_.at(nodes[i]).removeConnection(nodes[j]);
+        nodes_.at(nodes[j]).removeConnection(nodes[i]);
+      }
+    }
+  } else {
+    const auto &conn_pair =
+        std::get<AsymmetricConnections>(edge.getConnections());
+    nodes_.at(conn_pair.first).removeConnection(conn_pair.second);
   }
 
   edges_.erase(edgeId);

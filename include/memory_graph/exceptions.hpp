@@ -40,8 +40,13 @@ public:
  */
 class InvalidConnectionError : public std::runtime_error {
 public:
+  // Constructor for missing node ID (preserves existing behavior)
   explicit InvalidConnectionError(const std::string &nodeId)
       : std::runtime_error("Node with ID '" + nodeId + "' does not exist.") {}
+
+  struct RawMessageTag {};
+  InvalidConnectionError(RawMessageTag, const std::string &message)
+      : std::runtime_error(message) {}
 };
 
 } // namespace memory_graph
