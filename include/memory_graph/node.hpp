@@ -31,7 +31,19 @@ public:
 
   // Setters
   void setLabel(const std::string &label);
+
+  /**
+   * @deprecated This method is no longer used by the graph.
+   * Connections are now managed by MemoryGraph
+   * This method is kept for serialization compatibility only.
+   */
   void addConnection(const std::string &nodeId);
+
+  /**
+   * @deprecated This method is no longer used by the graph.
+   * Connections are now managed by MemoryGraph
+   * This method is kept for serialization compatibility only.
+   */
   void removeConnection(const std::string &nodeId);
   void setMetadata(const nlohmann::json &metadata);
   void updateMetadata(const std::string &key, const nlohmann::json &value);
