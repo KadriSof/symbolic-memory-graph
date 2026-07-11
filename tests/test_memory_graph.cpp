@@ -127,10 +127,9 @@ TEST(MemoryGraphTest, AddAsymmetricEdge) {
   EXPECT_EQ(graph.getEdges().size(), 1);
 
   // Check that connections was added to nodes
-  const auto &luffyNode = graph.getNode("luffy");
-  const auto &connections = luffyNode.getConnections();
-  EXPECT_EQ(connections.size(), 1);
-  EXPECT_EQ(connections[0], "shanks");
+  const auto &neighbors = graph.getNeighbors("luffy");
+  EXPECT_EQ(neighbors.size(), 1);
+  EXPECT_EQ(neighbors[0].getId(), "shanks");
 }
 
 TEST(MemoryGraphTest, AddSymmetricEdge) {
@@ -149,12 +148,12 @@ TEST(MemoryGraphTest, AddSymmetricEdge) {
   EXPECT_TRUE(graph.hasEdge("e1"));
 
   // Check bidirectional connections
-  const auto &luffyConnections = graph.getNode("luffy").getConnections();
-  const auto &zoroConnections = graph.getNode("zoro").getConnections();
+  const auto &luffyConnections = graph.getNeighbors("luffy");
+  const auto &zoroConnections = graph.getNeighbors("zoro");
   EXPECT_EQ(luffyConnections.size(), 1);
   EXPECT_EQ(zoroConnections.size(), 1);
-  EXPECT_EQ(luffyConnections[0], "zoro");
-  EXPECT_EQ(zoroConnections[0], "luffy");
+  EXPECT_EQ(luffyConnections[0].getId(), "zoro");
+  EXPECT_EQ(zoroConnections[0].getId(), "luffy");
 }
 
 TEST(MemoryGraphTest, AddGroupEdge) {
@@ -174,9 +173,9 @@ TEST(MemoryGraphTest, AddGroupEdge) {
 
   // Verify all pairs are connected
   EXPECT_TRUE(graph.hasEdge("group1"));
-  EXPECT_EQ(graph.getNode("a").getConnections().size(), 2);
-  EXPECT_EQ(graph.getNode("b").getConnections().size(), 2);
-  EXPECT_EQ(graph.getNode("c").getConnections().size(), 2);
+  EXPECT_EQ(graph.getNeighbors("a").size(), 2);
+  EXPECT_EQ(graph.getNeighbors("b").size(), 2);
+  EXPECT_EQ(graph.getNeighbors("c").size(), 2);
 }
 
 TEST(MemoryGraphTest, AddGroupEdgeWithMinimumNodes) {
@@ -191,8 +190,8 @@ TEST(MemoryGraphTest, AddGroupEdgeWithMinimumNodes) {
   EXPECT_NO_THROW(graph.addGroupEdge("group1", "Test Group", group, 1.0f));
 
   EXPECT_TRUE(graph.hasEdge("group1"));
-  EXPECT_EQ(graph.getNode("a").getConnections().size(), 1);
-  EXPECT_EQ(graph.getNode("a").getConnections().size(), 1);
+  EXPECT_EQ(graph.getNeighbors("a").size(), 1);
+  EXPECT_EQ(graph.getNeighbors("b").size(), 1);
 }
 
 TEST(MemoryGraphTest, AddGroupEdgeWithInvalidNodesThrows) {
@@ -287,18 +286,18 @@ TEST(MemoryGraphTest, RemoveGroupEdge) {
   graph.addGroupEdge("group1", "Test Group", group, 1.0f);
 
   // Verify connections exist
-  EXPECT_EQ(graph.getNode("a").getConnections().size(), 2);
-  EXPECT_EQ(graph.getNode("b").getConnections().size(), 2);
-  EXPECT_EQ(graph.getNode("c").getConnections().size(), 2);
+  EXPECT_EQ(graph.getNeighbors("a").size(), 2);
+  EXPECT_EQ(graph.getNeighbors("b").size(), 2);
+  EXPECT_EQ(graph.getNeighbors("c").size(), 2);
 
   // Remove the group edge
   graph.removeEdge("group1");
 
   // Verify all connections removed
   EXPECT_FALSE(graph.hasEdge("group1"));
-  EXPECT_EQ(graph.getNode("a").getConnections().size(), 0);
-  EXPECT_EQ(graph.getNode("b").getConnections().size(), 0);
-  EXPECT_EQ(graph.getNode("c").getConnections().size(), 0);
+  EXPECT_EQ(graph.getNeighbors("a").size(), 0);
+  EXPECT_EQ(graph.getNeighbors("b").size(), 0);
+  EXPECT_EQ(graph.getNeighbors("c").size(), 0);
 }
 
 TEST(MemoryGraphTest, GetGroupEdges) {
@@ -405,26 +404,18 @@ TEST(MemoryGraphTest, MixedGroupAndPairwiseEdges) {
   Edge pair("c_d", "c->d", EdgeType::ASYMMETRIC, cd, 1.0f);
   graph.addEdge(pair);
 
-  // Verify connections
-  // a: b, c (from group)
-  // b: a, c (from group)
-  // c: a, b, d (from group + asymmetric)
-  // d: [] (asymmetric edges don't add reverse connections)
-
-  EXPECT_EQ(graph.getNode("a").getConnections().size(), 2);
-  EXPECT_EQ(graph.getNode("b").getConnections().size(), 2);
-  EXPECT_EQ(graph.getNode("c").getConnections().size(), 3);
-  EXPECT_EQ(graph.getNode("d").getConnections().size(), 0);
+  EXPECT_EQ(graph.getNeighbors("a").size(), 2);
+  EXPECT_EQ(graph.getNeighbors("b").size(), 2);
+  EXPECT_EQ(graph.getNeighbors("c").size(), 3);
+  EXPECT_EQ(graph.getNeighbors("d").size(), 0);
 
   // Remove the group edge
   graph.removeEdge("group1");
 
   // c should still have d connection
-  EXPECT_EQ(graph.getNode("c").getConnections().size(), 1);
-
-  // a and b should have no connections
-  EXPECT_EQ(graph.getNode("a").getConnections().size(), 0);
-  EXPECT_EQ(graph.getNode("b").getConnections().size(), 0);
+  EXPECT_EQ(graph.getNeighbors("c").size(), 1);
+  EXPECT_EQ(graph.getNeighbors("a").size(), 0);
+  EXPECT_EQ(graph.getNeighbors("b").size(), 0);
 }
 
 // Edge Case Tests for Group Edges
@@ -445,7 +436,7 @@ TEST(MemoryGraphTest, GroupEdgeWithLargeNodeCount) {
 
   // Each node should have 99 connections
   const auto &firstNode = graph.getNode("node_0");
-  EXPECT_EQ(firstNode.getConnections().size(), 99);
+  EXPECT_EQ(graph.getNeighbors("node_0").size(), 99);
 }
 
 TEST(MemoryGraphTest, GroupEdgeSerializationRoundTrip) {
@@ -482,9 +473,9 @@ TEST(MemoryGraphTest, GroupEdgeSerializationRoundTrip) {
   EXPECT_NEAR(restored.getWeight(), 0.8, 1e-6);
 
   // Verify connections restored
-  EXPECT_EQ(deserialized.getNode("a").getConnections().size(), 2);
-  EXPECT_EQ(deserialized.getNode("b").getConnections().size(), 2);
-  EXPECT_EQ(deserialized.getNode("c").getConnections().size(), 2);
+  EXPECT_EQ(deserialized.getNeighbors("a").size(), 2);
+  EXPECT_EQ(deserialized.getNeighbors("b").size(), 2);
+  EXPECT_EQ(deserialized.getNeighbors("c").size(), 2);
 }
 
 TEST(MemoryGraphTest, AddDuplicateEdgeThrows) {
