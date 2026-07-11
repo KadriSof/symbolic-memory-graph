@@ -36,7 +36,9 @@ public:
    */
   Edge(const std::string &id, const std::string &label, EdgeType type,
        const Connections &connections, float weight = 1.0f,
-       const nlohmann::json &metadata = {});
+       const nlohmann::json &metadata = {}, bool isGroupEdge = false);
+
+  bool isGroupEdge() const { return isGroupEdge_; }
 
   // Getters
   const std::string &getId() const;
@@ -63,6 +65,7 @@ private:
   Connections connections_;
   float weight_;
   nlohmann::json metadata_;
+  bool isGroupEdge_ = false;
 
   // Helper to validate weight
   void validateWeight(float weight);

@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -26,11 +27,54 @@ public:
   std::vector<Node> getNodes() const;
 
   // Edge operations
+  /**
+   * @brief Add a pairwise edge (exactly 2 nodes)
+   * For symmetric edges: creates bidirectinal connection
+   * For asymmetric edges: creates directed connection
+   * @throws InvalidConnectionError if edge has != 2 nodes for symmetric
+   */
   void addEdge(const Edge &edge);
+
+  /**
+   * @brief Add a group edge (2+ nodes, symmetric only)
+   * Creates a clique where ALL nodes are mutually connected
+   * Useful for: teams, factions, families, communities
+   *
+   * @param id Unique identifier for the group edge
+   * @param label Human-readable name (e.g., "Wolf School")
+   * @param nodeIds Set of node IDs in the group (must have 2+ nodes)
+   * @param weight Strength of the group relationship (0.0 to 1.0)
+   * @param metadata Additional context (e.g., "founded", "location")
+   * @throws InvalidConnectionError if nodeIds size < 2 or nodes don't exist
+   *
+   * @example
+   * std::unordered_set<std::string> witchers = {"geralt", "vesemir",
+   * "lambert"}; graph.addGroupEdge("wolf_school", "Wolf School",
+   * witchers, 1.0f, json{{"founded", "1250"}});
+   */
+  void addGroupEdge(const std::string &id, const std::string &label,
+                    const std::unordered_set<std::string> &nodeIds,
+                    float weight = 1.0f, const nlohmann::json &metadata = {});
+
   void removeEdge(const std::string &edgeId);
   const Edge &getEdge(const std::string &edgeId) const;
   bool hasEdge(const std::string &edgeId) const;
   std::vector<Edge> getEdges() const;
+
+  /**
+   * @brief Get all group edges in the graph
+   * @return Vector of group edges (symmetric edges with 2+ nodes)
+   */
+  std::vector<Edge> getGroupEdges() const;
+
+  /**
+   * @brief Get all nodes that are members of a group
+   * @param groupId The group ID
+   * @return Set of node IDs in the group
+   * @throws EdgeNotFoundError if group doesn't exist
+   */
+  std::unordered_set<std::string>
+  getGroupMembers(const std::string &groupId) const;
 
   // Graph operations
   std::vector<Node> getNeighbors(const std::string &nodeId) const;

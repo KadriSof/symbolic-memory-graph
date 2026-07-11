@@ -300,21 +300,6 @@ TEST(SerializationTest, EdgeTypePreserved) {
   EXPECT_TRUE(charlieConn.empty()); // Charlie doesn't follow Alice back
 }
 
-TEST(SerializationTest, SerializationOptionsExcludeNodes) {
-  MemoryGraph original = createTestGraph();
-  SerializationOptions opts;
-  opts.include_nodes = false;
-
-  std::vector<uint8_t> binary = toBinary(original, opts);
-  MemoryGraph deserialized = fromBinary(binary);
-
-  // Node should be exclude, mate!
-  EXPECT_EQ(deserialized.getNodes().size(), 0);
-  // Edges and metadata should still be intact?
-  EXPECT_GT(deserialized.getEdges().size(), 0);
-  EXPECT_FALSE(deserialized.getMetadata().empty());
-}
-
 TEST(SerializationTest, SerializationOptionsExcludeEdges) {
   MemoryGraph original = createTestGraph();
   SerializationOptions opts;

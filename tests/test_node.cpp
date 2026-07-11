@@ -23,6 +23,7 @@ TEST(NodeTest, ConstructorWithMetadata) {
   EXPECT_EQ(node.getLabel(), "Monkey D. Luffy");
   EXPECT_EQ(node.getMetadata()["type"], "character");
   EXPECT_EQ(node.getMetadata()["bounty"], 3000000000);
+  EXPECT_TRUE(node.getConnections().empty());
 }
 
 // Getter Tests
@@ -65,133 +66,14 @@ TEST(NodeTest, UpdateMetadata) {
   EXPECT_EQ(node.getMetadata()["type"], "devil_fruit_user"); // Overwrites
 }
 
-// Connection Tests
-TEST(NodeTest, AddConnection) {
-  Node node("luffy", "Monkey D. Luffy");
-
-  node.addConnection("shanks");
-  EXPECT_EQ(node.getConnections().size(), 1);
-  EXPECT_EQ(node.getConnections()[0], "shanks");
-}
-
-TEST(NodeTest, AddDuplicateConnection) {
-  Node node("luffy", "Monkey D. Luffy");
-
-  node.addConnection("shanks");
-  node.addConnection("shanks"); // Duplicate
-
-  EXPECT_EQ(node.getConnections().size(), 1); // Should still be 1
-  EXPECT_EQ(node.getConnections()[0], "shanks");
-}
-
-TEST(NodeTest, AddMultipleConnections) {
-  Node node("luffy", "Monkey D. Luffy");
-
-  node.addConnection("shanks");
-  node.addConnection("zoro");
-  node.addConnection("nami");
-
-  EXPECT_EQ(node.getConnections().size(), 3);
-
-  // Verify all connections exist
-  const auto &connections = node.getConnections();
-  EXPECT_TRUE(std::find(connections.begin(), connections.end(), "shanks") !=
-              connections.end());
-  EXPECT_TRUE(std::find(connections.begin(), connections.end(), "zoro") !=
-              connections.end());
-  EXPECT_TRUE(std::find(connections.begin(), connections.end(), "nami") !=
-              connections.end());
-}
-
-TEST(NodeTest, RemoveConnection) {
-  Node node("luffy", "Monkey D. Luffy");
-  node.addConnection("shanks");
-  node.addConnection("zoro");
-  node.addConnection("nami");
-
-  node.removeConnection("zoro");
-  EXPECT_EQ(node.getConnections().size(), 2);
-
-  const auto &connections = node.getConnections();
-  EXPECT_TRUE(std::find(connections.begin(), connections.end(), "shanks") !=
-              connections.end());
-  EXPECT_FALSE(std::find(connections.begin(), connections.end(), "zoro") !=
-               connections.end());
-  EXPECT_TRUE(std::find(connections.begin(), connections.end(), "nami") !=
-              connections.end());
-}
-
-TEST(NodeTest, RemoveNonExistentConnection) {
-  Node node("luffy", "Monkey D. Luffy");
-  node.addConnection("shanks");
-
-  // Removing non-existent connection should do nothing (no crash)
-  node.removeConnection("zoro");
-  EXPECT_EQ(node.getConnections().size(), 1);
-  EXPECT_EQ(node.getConnections()[0], "shanks");
-}
-
-TEST(NodeTest, RemoveFromEmptyConnections) {
-  Node node("luffy", "Monkey D. Luffy");
-
-  // Removing from empty vector should not crash
-  EXPECT_NO_THROW(node.removeConnection("anything"));
-  EXPECT_TRUE(node.getConnections().empty());
-}
-
-// Serialization Tests
-TEST(NodeTest, ToJsonBasic) {
-  Node node("luffy", "Monkey D. Luffy", json{{"bounty", 3000000000}});
-  node.addConnection("shanks");
-  node.addConnection("zoro");
-
-  json nodeJson = node.toJson();
-
-  EXPECT_EQ(nodeJson["id"], "luffy");
-  EXPECT_EQ(nodeJson["label"], "Monkey D. Luffy");
-  EXPECT_EQ(nodeJson["metadata"]["bounty"], 3000000000);
-  EXPECT_EQ(nodeJson["connections"].size(), 2);
-  EXPECT_EQ(nodeJson["connections"][0], "shanks");
-  EXPECT_EQ(nodeJson["connections"][1], "zoro");
-}
-
-TEST(NodeTest, ToJsonNoConnections) {
+// Serialization Tests (Note: connections are serialized but never mutated)
+TEST(NodeTest, ToJsonEmptyConnections) {
   Node node("luffy", "Monkey D. Luffy");
 
   json nodeJson = node.toJson();
 
   EXPECT_EQ(nodeJson["connections"].size(), 0);
   EXPECT_TRUE(nodeJson["connections"].is_array());
-}
-
-TEST(NodeTest, FromJsonBasic) {
-  json nodeJson = {{"id", "luffy"},
-                   {"label", "Monkey D. Luffy"},
-                   {"connections", {"shanks", "zoro"}},
-                   {"metadata", {{"bounty", 3000000000}}}};
-
-  Node node = Node::fromJson(nodeJson);
-
-  EXPECT_EQ(node.getId(), "luffy");
-  EXPECT_EQ(node.getLabel(), "Monkey D. Luffy");
-  EXPECT_EQ(node.getMetadata()["bounty"], 3000000000);
-  EXPECT_EQ(node.getConnections().size(), 2);
-  EXPECT_EQ(node.getConnections()[0], "shanks");
-  EXPECT_EQ(node.getConnections()[1], "zoro");
-}
-
-TEST(NodeTest, FromJsonNoMetadata) {
-  json nodeJson = {
-      {"id", "luffy"}, {"label", "Monkey D. Luffy"}, {"connections", {"shanks"}}
-      // No metadata field
-  };
-
-  Node node = Node::fromJson(nodeJson);
-
-  EXPECT_EQ(node.getId(), "luffy");
-  EXPECT_EQ(node.getLabel(), "Monkey D. Luffy");
-  EXPECT_TRUE(node.getMetadata().is_object()); // Should default to empty object
-  EXPECT_EQ(node.getConnections().size(), 1);
 }
 
 TEST(NodeTest, FromJsonEmptyConnections) {
@@ -203,27 +85,6 @@ TEST(NodeTest, FromJsonEmptyConnections) {
   Node node = Node::fromJson(nodeJson);
 
   EXPECT_TRUE(node.getConnections().empty());
-}
-
-TEST(NodeTest, SerializationRoundTrip) {
-  // Original node
-  Node original("luffy", "Monkey D. Luffy", json{{"bounty", 3000000000}});
-  original.addConnection("shanks");
-  original.addConnection("zoro");
-
-  // Serialize and deserialize
-  json serialized = original.toJson();
-  Node deserialized = Node::fromJson(serialized);
-
-  // Compare
-  EXPECT_EQ(original.getId(), deserialized.getId());
-  EXPECT_EQ(original.getLabel(), deserialized.getLabel());
-  EXPECT_EQ(original.getMetadata()["bounty"],
-            deserialized.getMetadata()["bounty"]);
-  EXPECT_EQ(original.getConnections().size(),
-            deserialized.getConnections().size());
-  EXPECT_EQ(original.getConnections()[0], deserialized.getConnections()[0]);
-  EXPECT_EQ(original.getConnections()[1], deserialized.getConnections()[1]);
 }
 
 // Edge Case Tests

@@ -5,6 +5,7 @@
 #include "nlohmann/json.hpp"
 #include <cstddef>
 #include <queue>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -54,7 +55,7 @@ void MemoryGraph::removeNode(const std::string &nodeId) {
   }
 
   for (const auto &edgeId : edgesToRemove) {
-    removeEdge(edgeId);
+    edges_.erase(edgeId);
   }
 
   nodes_.erase(nodeId);
@@ -101,7 +102,6 @@ void MemoryGraph::addEdge(const Edge &edge) {
       }
     }
 
-    // Update: add bidirectional connections
     auto it = conn_set.begin();
     std::string node1 = *it;
     std::string node2 = *(++it);
@@ -119,11 +119,72 @@ void MemoryGraph::addEdge(const Edge &edge) {
           !hasNode(conn_pair.first) ? conn_pair.first : conn_pair.second);
     }
 
-    // Update: add unidirectional connection
     nodes_.at(conn_pair.first).addConnection(conn_pair.second);
   }
 
   edges_.emplace(edge.getId(), edge);
+  invalidateCache();
+}
+
+void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
+                               const std::unordered_set<std::string> &nodeIds,
+                               float weight, const nlohmann::json &metadata) {
+  // 1. Validate edge ID
+  if (edges_.find(id) != edges_.end()) {
+    throw DuplicateIdError("[MemoryGraph:addGroupEdge] Edge with ID '" + id +
+                           "' already exists");
+  }
+
+  // 2. Validate group size
+  if (nodeIds.size() < 2) {
+    throw InvalidConnectionError(InvalidConnectionError::RawMessageTag{},
+                                 "[MemoryGraph:addGroupEdge] Group edge "
+                                 "requires at least 2 nodes, got " +
+                                     std::to_string(nodeIds.size()));
+  }
+
+  // 3. Validate all nodes exists
+  for (const auto &nodeId : nodeIds) {
+    if (!hasNode(nodeId)) {
+      throw InvalidConnectionError(nodeId);
+    }
+  }
+
+  // 4. Check for duplicate group
+  for (const auto &[existingId, existingEdge] : edges_) {
+    if (existingEdge.getType() == EdgeType::SYMMETRIC) {
+      const auto &existingSet =
+          std::get<SymmetricConnections>(existingEdge.getConnections());
+      if (existingSet == nodeIds && existingEdge.getLabel() == label) {
+        throw DuplicateIdError("[MemoryGraph:addGroupEdge] Group with same "
+                               "nodes and label already exist: '" +
+                               label + "'");
+      }
+    }
+  }
+
+  // 5. Validate weight
+  if (weight < 0.0f || weight > 1.0f) {
+    throw std::invalid_argument("[MemoryGraph:addGroupEdge] Group edge weight "
+                                "must be between 0.0 and 1.0");
+  }
+
+  // 5. Create the group edge (symmetric by definition)
+  SymmetricConnections conn(nodeIds);
+  Edge groupEdge(id, label, EdgeType::SYMMETRIC, conn, weight, metadata, true);
+
+  // This ensures Node::connections_ is populated for serialization
+  std::vector<std::string> nodes(nodeIds.begin(), nodeIds.end());
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    for (size_t j = i + 1; j < nodes.size(); ++j) {
+      nodes_.at(nodes[i]).addConnection(nodes[j]);
+      nodes_.at(nodes[j]).addConnection(nodes[i]);
+    }
+  }
+
+  // 6. Store the edge
+  edges_.emplace(id, groupEdge);
+
   invalidateCache();
 }
 
@@ -140,11 +201,14 @@ void MemoryGraph::removeEdge(const std::string &edgeId) {
   if (edge.getType() == EdgeType::SYMMETRIC) {
     const auto &conn_set =
         std::get<SymmetricConnections>(edge.getConnections());
-    auto it = conn_set.begin();
-    std::string node1 = *it;
-    std::string node2 = *(++it);
-    nodes_.at(node1).removeConnection(node2);
-    nodes_.at(node2).removeConnection(node1);
+
+    std::vector<std::string> nodes(conn_set.begin(), conn_set.end());
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      for (size_t j = i + 1; j < nodes.size(); ++j) {
+        nodes_.at(nodes[i]).removeConnection(nodes[j]);
+        nodes_.at(nodes[j]).removeConnection(nodes[i]);
+      }
+    }
   } else {
     const auto &conn_pair =
         std::get<AsymmetricConnections>(edge.getConnections());
@@ -170,16 +234,52 @@ std::vector<Edge> MemoryGraph::getEdges() const {
   return result;
 }
 
+std::vector<Edge> MemoryGraph::getGroupEdges() const {
+  std::vector<Edge> result;
+  for (const auto &[id, edge] : edges_) {
+    if (edge.isGroupEdge()) {
+      result.push_back(edge);
+    }
+  }
+
+  return result;
+}
+
 std::vector<Node> MemoryGraph::getNeighbors(const std::string &nodeId) const {
   if (!hasNode(nodeId)) {
     throw NodeNotFoundError(nodeId);
   }
 
+  const auto &adjList = getAdjacencyList();
   std::vector<Node> neighbors;
-  for (const auto &neighborId : nodes_.at(nodeId).getConnections()) {
-    neighbors.push_back(nodes_.at(neighborId));
+
+  auto it = adjList.find(nodeId);
+  if (it != adjList.end()) {
+    for (const auto &[neighborId, isSymmetric] : it->second) {
+      neighbors.push_back(nodes_.at(neighborId));
+    }
   }
+
   return neighbors;
+}
+
+std::unordered_set<std::string>
+MemoryGraph::getGroupMembers(const std::string &groupId) const {
+  if (!hasEdge(groupId)) {
+    throw EdgeNotFoundError("[MemoryGraph:getGroupMembers] Edge with ID '" +
+                            groupId + "' not found");
+  }
+
+  const Edge &edge = getEdge(groupId);
+
+  if (!edge.isGroupEdge()) {
+    throw std::invalid_argument("[MemoryGraph:getGroupMembers] Edge '" +
+                                groupId + "' is not a group edge");
+  }
+
+  const auto &conn_set = std::get<SymmetricConnections>(edge.getConnections());
+
+  return conn_set;
 }
 
 nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
@@ -187,6 +287,8 @@ nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
   if (!hasNode(nodeId)) {
     throw NodeNotFoundError(nodeId);
   }
+
+  const auto &adjList = getAdjacencyList();
 
   nlohmann::json result;
   std::unordered_set<std::string> visited;
@@ -209,8 +311,12 @@ nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
 
     visited.insert(currentId);
 
+    auto it = adjList.find(currentId);
+    if (it == adjList.end())
+      continue;
+
     // Explore neighbors
-    for (const auto &neighborId : nodes_.at(currentId).getConnections()) {
+    for (const auto &[neighborId, isSymmetric] : it->second) {
       // Find the edge between currentId and neighborId
       float edgeWeight = 1.0f; // Default weight
       try {
@@ -248,7 +354,7 @@ std::string MemoryGraph::findEdgeId(const std::string &nodeId1,
       const auto &conn_pair =
           std::get<AsymmetricConnections>(edge.getConnections());
       if ((conn_pair.first == nodeId1 && conn_pair.second == nodeId2) ||
-          (conn_pair.first == nodeId2 && conn_pair.second == nodeId2)) {
+          (conn_pair.first == nodeId2 && conn_pair.second == nodeId1)) {
         return edgeId;
       }
     }
@@ -340,7 +446,24 @@ MemoryGraph MemoryGraph::fromJson(const nlohmann::json &graphJson) {
 
   // Deserialize edges
   for (const auto &[edgeId, edgeJson] : graphJson["edges"].items()) {
-    graph.addEdge(Edge::fromJson(edgeJson));
+    Edge edge = Edge::fromJson(edgeJson);
+
+    // Check if this is a group edge
+    if (edge.isGroupEdge()) {
+      // Extract node IDs from the connections
+      const auto &conn = std::get<SymmetricConnections>(edge.getConnections());
+
+      // Create a set of node IDs from the connection
+      std::unordered_set<std::string> nodeIds;
+      for (const auto &nodeId : conn) {
+        nodeIds.insert(nodeId);
+      }
+
+      graph.addGroupEdge(edge.getId(), edge.getLabel(), nodeIds,
+                         edge.getWeight(), edge.getMetadata());
+    } else {
+      graph.addEdge(edge);
+    }
   }
 
   return graph;

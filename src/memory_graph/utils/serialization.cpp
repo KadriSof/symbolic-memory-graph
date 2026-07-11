@@ -38,7 +38,7 @@ namespace memory_graph::utils {
 namespace {
 constexpr uint32_t MAGIC = 0x474D454D; // "MEMG" in little-endian
 constexpr uint32_t FLAG_HAS_METADATA = 1 << 0;
-constexpr uint32_t FLAG_HAS_NODES = 1 << 1;
+constexpr uint32_t FLAG_HAS_NODES = 1 << 1; // We will keep this for now
 constexpr uint32_t FLAG_HAS_EDGES = 1 << 2;
 
 struct BinaryHeader {
@@ -119,14 +119,8 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
   header.flags = 0;
 
   // 2. Apply options to JSON and header
-  if (options.include_nodes) {
-    header.flags |= FLAG_HAS_NODES;
-    header.node_count = graph.getNodes().size();
-  } else {
-    header.node_count = 0;
-    if (graphJson.contains("nodes"))
-      graphJson["nodes"] = nlohmann::json::array();
-  }
+  header.flags |= FLAG_HAS_NODES;
+  header.node_count = graph.getNodes().size();
 
   if (options.include_edges) {
     header.flags |= FLAG_HAS_EDGES;
@@ -321,7 +315,9 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   // Find removed edges: store IDs only
   std::vector<std::string> removedEdges;
   for (const auto &id : beforeEdges) {
-    removedEdges.push_back(id);
+    if (afterEdges.find(id) == afterEdges.end()) {
+      removedEdges.push_back(id);
+    }
   }
 
   // Check for modified edges

@@ -2,6 +2,7 @@
 #include "nlohmann/json.hpp"
 #include <algorithm>
 #include <string>
+#include <vector>
 
 namespace memory_graph {
 
@@ -17,20 +18,24 @@ const std::vector<std::string> &Node::getConnections() const {
 const nlohmann::json &Node::getMetadata() const { return metadata_; }
 
 void Node::setLabel(const std::string &label) { label_ = label; }
+void Node::setMetadata(const nlohmann::json &metadata) { metadata_ = metadata; }
+void Node::updateMetadata(const std::string &key, const nlohmann::json &value) {
+  metadata_[key] = value;
+}
+
 void Node::addConnection(const std::string &nodeId) {
+  // DEPRECATED: USED ONLY FOR DESERIALIZATION!
   if (std::find(connections_.begin(), connections_.end(), nodeId) ==
       connections_.end()) {
     connections_.push_back(nodeId);
   }
 }
+
 void Node::removeConnection(const std::string &nodeId) {
+  // DEPRECATED: USED ONLY FOR DESERIALIZATION!
   connections_.erase(
       std::remove(connections_.begin(), connections_.end(), nodeId),
       connections_.end());
-}
-void Node::setMetadata(const nlohmann::json &metadata) { metadata_ = metadata; }
-void Node::updateMetadata(const std::string &key, const nlohmann::json &value) {
-  metadata_[key] = value;
 }
 
 nlohmann::json Node::toJson() const {
