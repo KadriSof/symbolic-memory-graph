@@ -36,15 +36,32 @@ public:
 
 /**
  * @class InvalidConnectionError
- * @brief Thrown when an edge references a non-existent node.
+ * @brief Thrown when a connection/edge definition is invalid.
+ *
+ * This exception has two constructors:
+ * - For missing node IDs: InvalidConnectionError(nodeId)
+ * - For custom validation messages: InvalidConnectionError(RawMessageTag,
+ * message)
  */
 class InvalidConnectionError : public std::runtime_error {
 public:
-  // Constructor for missing node ID (preserves existing behavior)
+  /**
+   * @brief Constructor for missing node ID
+   * @param nodeId The ID of the node that does not exist
+   */
   explicit InvalidConnectionError(const std::string &nodeId)
       : std::runtime_error("Node with ID '" + nodeId + "' does not exist.") {}
 
+  /**
+   * @brief Tag type to distinguish the raw message constructor
+   */
   struct RawMessageTag {};
+
+  /**
+   * @brief Constructor for raw error messages
+   * @param tag Tag to distinguish from the node ID constructor
+   * @param message The raw error message
+   */
   InvalidConnectionError(RawMessageTag, const std::string &message)
       : std::runtime_error(message) {}
 };

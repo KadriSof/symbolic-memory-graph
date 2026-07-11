@@ -137,9 +137,10 @@ void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
 
   // 2. Validate group size
   if (nodeIds.size() < 2) {
-    throw InvalidConnectionError(
-        "[MemoryGraph:addGroupEdge] Group edge requires at least 2 nodes, got" +
-        std::to_string(nodeIds.size()));
+    throw InvalidConnectionError(InvalidConnectionError::RawMessageTag{},
+                                 "[MemoryGraph:addGroupEdge] Group edge "
+                                 "requires at least 2 nodes, got " +
+                                     std::to_string(nodeIds.size()));
   }
 
   // 3. Validate all nodes exists
