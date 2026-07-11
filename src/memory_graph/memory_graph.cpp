@@ -446,7 +446,24 @@ MemoryGraph MemoryGraph::fromJson(const nlohmann::json &graphJson) {
 
   // Deserialize edges
   for (const auto &[edgeId, edgeJson] : graphJson["edges"].items()) {
-    graph.addEdge(Edge::fromJson(edgeJson));
+    Edge edge = Edge::fromJson(edgeJson);
+
+    // Check if this is a group edge
+    if (edge.isGroupEdge()) {
+      // Extract node IDs from the connections
+      const auto &conn = std::get<SymmetricConnections>(edge.getConnections());
+
+      // Create a set of node IDs from the connection
+      std::unordered_set<std::string> nodeIds;
+      for (const auto &nodeId : conn) {
+        nodeIds.insert(nodeId);
+      }
+
+      graph.addGroupEdge(edge.getId(), edge.getLabel(), nodeIds,
+                         edge.getWeight(), edge.getMetadata());
+    } else {
+      graph.addEdge(edge);
+    }
   }
 
   return graph;
