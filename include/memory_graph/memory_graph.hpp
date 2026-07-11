@@ -38,19 +38,19 @@ public:
   /**
    * @brief Add a group edge (2+ nodes, symmetric only)
    * Creates a clique where ALL nodes are mutually connected
-   * Useful for: teams, factions, famillies, communities, etc.
+   * Useful for: teams, factions, families, communities
    *
    * @param id Unique identifier for the group edge
    * @param label Human-readable name (e.g., "Wolf School")
    * @param nodeIds Set of node IDs in the group (must have 2+ nodes)
-   * @param weight Strength of group relationship (0.0, 1.0)
-   * @param metadata Additional context (e.g., "founded", "location", etc.)
+   * @param weight Strength of the group relationship (0.0 to 1.0)
+   * @param metadata Additional context (e.g., "founded", "location")
    * @throws InvalidConnectionError if nodeIds size < 2 or nodes don't exist
    *
    * @example
    * std::unordered_set<std::string> witchers = {"geralt", "vesemir",
-   * "lambert"}; graph.addGroupEdge("wolf_school", "Wolf School", 1.0f,
-   * json{{"founded", "1250"}});
+   * "lambert"}; graph.addGroupEdge("wolf_school", "Wolf School",
+   * witchers, 1.0f, json{{"founded", "1250"}});
    */
   void addGroupEdge(const std::string &id, const std::string &label,
                     const std::unordered_set<std::string> &nodeIds,
