@@ -2,12 +2,10 @@
 #include "memory_graph/memory_graph.hpp"
 #include "memory_graph/node.hpp"
 #include "memory_graph/utils/traversal.hpp"
-#include "nlohmann/json.hpp"
 #include <cstddef>
 #include <exception>
 #include <iostream>
-#include <nlohmann/json_fwd.hpp>
-#include <ostream>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -26,18 +24,16 @@ using json = nlohmann::json;
  * - Factions: Witchers, Nilfgaard, Temeria
  *
  * Relationships (Symmetric - bidirectional):
- * - Siblings: Ciri <-> Geralt (adoptive father-daughter)
- * - Friends: Geralt <-> Dandelion, Geralt <-> Vesemir
+ * - Siblings: Ciri ↔ Geralt (adoptive father-daughter)
+ * - Friends: Geralt ↔ Dandelion, Geralt ↔ Vesemir
  * - Witcher brothers: Geralt, Lambert, Eskel, Vesemir (all connected)
  *
  * Relationships (Asymmetric - directed):
- * - Trained by: Geralt -> Vesemir, Ciri -> Geralt, Lambert -> Vesemir
- * - Loves: Gerlat -> Yennefer, Triss -> Geralt (one-sided for the sake of the
- * example T-T )
- * - Belongs to: Geralt -> Witchers, Ciri -> Witchers, Vesemir -> Witchers
- * - Located in: Kaer Morhen -> Kaer Morhen (self-loop location)
+ * - Trained by: Geralt → Vesemir, Ciri → Geralt, Lambert → Vesemir
+ * - Loves: Geralt → Yennefer, Triss → Geralt (one-sided)
+ * - Belongs to: Geralt → Witchers, Ciri → Witchers, Vesemir → Witchers
+ * - Located in: Kaer Morhen → Kaer Morhen (self-loop for location)
  */
-
 MemoryGraph createWitcherGraph() {
   MemoryGraph graph(json{{"name", "Witcher Universe Graph"},
                          {"version", "1.0"},
@@ -102,15 +98,14 @@ MemoryGraph createWitcherGraph() {
   graph.addNode(temeria);
 
   // SYMMETRIC EDGES (Bidirectional / Mutual Relationships)
+
   // 1. Witcher Brotherhood - all Wolf School witchers are connected
   // This creates a complete graph (clique) among witchers
   // All witchers: geralt, vesemir, lambert, eskel, ciri
   std::unordered_set<std::string> witcherBrothers = {
       "geralt", "vesemir", "lambert", "eskel", "ciri"};
-  SymmetricConnections brotherhoodConn(witcherBrothers);
-  Edge brotherhood("wolf_brotherhood", "witcher_brother", EdgeType::SYMMETRIC,
-                   brotherhoodConn, 1.0f);
-  graph.addEdge(brotherhood);
+  graph.addGroupEdge("wolf_brotherhood", "witcher_brother", witcherBrothers,
+                     1.0f, json{{"school", "wolf"}});
 
   // 2. Close Friends
   SymmetricConnections friendsConn{"geralt", "dandelion"};
@@ -135,6 +130,7 @@ MemoryGraph createWitcherGraph() {
   graph.addEdge(family2);
 
   // ASYMMETRIC EDGES (Directed Relationships)
+
   // 4. Training relationships (mentor → student)
   AsymmetricConnections geraltVesemir{"geralt", "vesemir"};
   Edge trainedBy1("geralt_trained_by", "trained_by", EdgeType::ASYMMETRIC,
@@ -237,7 +233,7 @@ MemoryGraph createWitcherGraph() {
  */
 void printSection(const std::string &title) {
   std::cout << "\n" << std::string(80, '=') << std::endl;
-  std::cout << " " << title << std::endl;
+  std::cout << "  " << title << std::endl;
   std::cout << std::string(80, '=') << std::endl;
 }
 
@@ -249,85 +245,304 @@ void printNodes(const std::vector<std::string> &nodes,
   if (!label.empty()) {
     std::cout << label << ": ";
   }
-
   for (size_t i = 0; i < nodes.size(); ++i) {
     std::cout << nodes[i];
     if (i < nodes.size() - 1)
-      std::cout << " -> ";
+      std::cout << " → ";
   }
-
   std::cout << std::endl;
 }
 
 int main() {
-  std::cout << "=============================================" << std::endl;
-  std::cout << " Witcher Universe Graph - Traversal Examples " << std::endl;
-  std::cout << "=============================================" << std::endl;
+  std::cout
+      << "╔═══════════════════════════════════════════════════════════════╗"
+      << std::endl;
+  std::cout
+      << "║         Witcher Universe Graph - Traversal Examples           ║"
+      << std::endl;
+  std::cout
+      << "╚═══════════════════════════════════════════════════════════════╝"
+      << std::endl;
 
   // 1. Create the Witcher Graph
-  MemoryGraph graph = createWitcherGraph();
-  std::cout << "\n [X] Created Witcher graph with " << graph.getNodes().size()
-            << " nodes and" << graph.getEdges().size() << "edges" << std::endl;
-  std::cout << " Nodes include: gerlat, yennefer, ciri, triss, vesemir, ..."
+  auto graph = createWitcherGraph();
+  std::cout << "\n[X] Created Witcher graph with " << graph.getNodes().size()
+            << " nodes and " << graph.getEdges().size() << " edges"
             << std::endl;
-  std::cout << " Edges include: witcher_brotherhood (symmertric), trained_by "
+  std::cout
+      << "   Nodes include: geralt, yennefer, ciri, vesemir, dandelion, ..."
+      << std::endl;
+  std::cout << "   Edges include: witcher_brotherhood (symmetric), trained_by "
                "(asymmetric), ..."
             << std::endl;
 
-  // 2. Basic Traversals
+  // 2. Basic Traversals - BFS and DFS
   printSection("2. Basic Traversals");
 
   std::cout << "\n[2.1] BFS from 'geralt' (depth 1):" << std::endl;
   auto bfsResult = bfs(graph, "geralt", 1);
-  std::cout << " Found" << bfsResult.size()
+  std::cout << "   Found " << bfsResult.size()
             << " nodes within depth 1:" << std::endl;
-  std::cout << " ";
-
+  std::cout << "   ";
   for (const auto &id : bfsResult) {
+    std::cout << id << " ";
+  }
+  std::cout << std::endl;
+
+  std::cout << "\n[2.2] BFS from 'ciri' (depth 2):" << std::endl;
+  auto bfsCiri = bfs(graph, "ciri", 2);
+  std::cout << "   Found " << bfsCiri.size()
+            << " nodes within depth 2:" << std::endl;
+  std::cout << "   ";
+  for (const auto &id : bfsCiri) {
     std::cout << id << " ";
   }
   std::cout << std::endl;
 
   std::cout << "\n[2.3] DFS from 'geralt' (depth 2):" << std::endl;
   auto dfsResult = dfs(graph, "geralt", 2);
-  std::cout << " Found" << dfsResult.size()
+  std::cout << "   Found " << dfsResult.size()
             << " nodes within depth 2:" << std::endl;
-  std::cout << " ";
+  std::cout << "   ";
   for (const auto &id : dfsResult) {
-    std::cout << id << "";
+    std::cout << id << " ";
   }
   std::cout << std::endl;
 
   // 3. Path Finding
+  printSection("3. Path Finding");
+
   try {
-    std::cout << "\n[3.1] Shortest path from 'gerlat' to 'ciri':" << std::endl;
-    auto path1 = shortestPath(graph, "geralt", "ciri");
-    printNodes(path1, "Path");
-    std::cout << " Path1 length:" << (path1.size() - 1) << "edges" << std::endl;
+    std::cout << "\n[3.1] Shortest path from 'geralt' to 'ciri':" << std::endl;
+    auto path = shortestPath(graph, "geralt", "ciri");
+    printNodes(path, "   Path");
+    std::cout << "   Path length: " << (path.size() - 1) << " edges"
+              << std::endl;
 
     std::cout << "\n[3.2] Shortest path from 'geralt' to 'novigrad':"
               << std::endl;
     auto path2 = shortestPath(graph, "geralt", "novigrad");
-    printNodes(path2, " Path");
-    std::cout << " Path2 length:" << (path2.size() - 1) << " edges"
+    printNodes(path2, "   Path");
+    std::cout << "   Path length: " << (path2.size() - 1) << " edges"
               << std::endl;
 
     std::cout << "\n[3.3] All paths from 'geralt' to 'witchers' (max depth 3):"
               << std::endl;
     auto allPaths = findAllPaths(graph, "geralt", "witchers", 3);
-    std::cout << " Found" << allPaths.size() << "paths" << std::endl;
-    for (size_t i = 0; allPaths.size(); ++i) {
-      std::cout << " Path" << (i + 1) << ":";
+    std::cout << "   Found " << allPaths.size() << " paths:" << std::endl;
+    for (size_t i = 0; i < allPaths.size(); ++i) {
+      std::cout << "   Path " << (i + 1) << ": ";
       printNodes(allPaths[i]);
     }
   } catch (const std::exception &e) {
-    std::cout << " [!] Error:" << e.what() << std::endl;
+    std::cout << "   ❌ Error: " << e.what() << std::endl;
   }
 
+  // 4. Graph Properties
   printSection("4. Graph Properties");
 
   std::cout << "\n[4.1] Connectivity check from 'geralt':" << std::endl;
   bool connected = isConnected(graph, "geralt");
-  std::cout << " Graph is" << (connected ? "connected" : "disonnected")
+  std::cout << "   Graph is " << (connected ? "connected" : "disconnected")
             << std::endl;
+
+  std::cout << "\n[4.2] Cycle detection:" << std::endl;
+  bool hasCycles = hasCycle(graph);
+  std::cout << "   Graph has cycles: " << (hasCycles ? "✅ YES" : "❌ NO")
+            << std::endl;
+  if (hasCycles) {
+    std::cout << "   (Cycles exist due to symmetric edges like the witcher "
+                 "brotherhood clique)"
+              << std::endl;
+  }
+
+  try {
+    std::cout << "\n[4.3] Topological sort:" << std::endl;
+    auto sorted = topologicalSort(graph);
+    std::cout << "   Found " << sorted.size()
+              << " nodes in topological order:" << std::endl;
+    std::cout << "   ";
+    for (const auto &id : sorted) {
+      std::cout << id << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "   (Topological sort only works for DAGs; it skipped cycles)"
+              << std::endl;
+  } catch (const std::exception &e) {
+    std::cout << "   ❌ Error: " << e.what() << std::endl;
+    std::cout << "   (Graph has cycles, so topological sort is impossible)"
+              << std::endl;
+  }
+
+  // 5. Node Queries
+  printSection("5. Node Queries");
+
+  std::cout << "\n[5.1] Find nodes with label containing 'Geralt':"
+            << std::endl;
+  auto labels = findNodesByLabel(graph, "Geralt of Rivia");
+  std::cout << "   Found: ";
+  for (const auto &id : labels) {
+    std::cout << id << " ";
+  }
+  std::cout << std::endl;
+
+  std::cout << "\n[5.2] Find nodes by metadata (type = 'witcher'):"
+            << std::endl;
+  auto witchers = findNodesByMetadata(graph, "type", "witcher");
+  std::cout << "   Found " << witchers.size() << " witchers: ";
+  for (const auto &id : witchers) {
+    std::cout << id << " ";
+  }
+  std::cout << std::endl;
+
+  std::cout << "\n[5.3] Find nodes by metadata (school = 'Wolf'):" << std::endl;
+  auto wolfSchool = findNodesByMetadata(graph, "school", "Wolf");
+  std::cout << "   Found " << wolfSchool.size() << " Wolf School witchers: ";
+  for (const auto &id : wolfSchool) {
+    std::cout << id << " ";
+  }
+  std::cout << std::endl;
+
+  // 6. Subgraph Extraction
+  printSection("6. Subgraph Extraction");
+
+  std::cout << "\n[6.1] Extract subgraph centered on 'geralt' (radius 1):"
+            << std::endl;
+  auto sub1 = subgraph(graph, "geralt", 1);
+  std::cout << "   Subgraph has " << sub1.getNodes().size() << " nodes and "
+            << sub1.getEdges().size() << " edges" << std::endl;
+  std::cout << "   Nodes: ";
+  for (const auto &node : sub1.getNodes()) {
+    std::cout << node.getId() << " ";
+  }
+  std::cout << std::endl;
+
+  std::cout << "\n[6.2] Extract subgraph centered on 'ciri' (radius 2):"
+            << std::endl;
+  auto sub2 = subgraph(graph, "ciri", 2);
+  std::cout << "   Subgraph has " << sub2.getNodes().size() << " nodes and "
+            << sub2.getEdges().size() << " edges" << std::endl;
+
+  std::cout << "\n[6.3] Extract subgraph by predicate (all sorceresses):"
+            << std::endl;
+  auto sub3 = subgraphByPredicate(
+      graph,
+      [](const Node &node) {
+        const auto &meta = node.getMetadata();
+        return meta.contains("type") && meta["type"] == "sorceress";
+      },
+      true // Include neighbors
+  );
+  std::cout << "   Subgraph has " << sub3.getNodes().size() << " nodes and "
+            << sub3.getEdges().size() << " edges" << std::endl;
+  std::cout << "   Nodes: ";
+  for (const auto &node : sub3.getNodes()) {
+    std::cout << node.getId() << " ";
+  }
+  std::cout << std::endl;
+
+  std::cout
+      << "\n[6.4] Extract subgraph by predicate (only Geralt) WITH neighbors:"
+      << std::endl;
+  auto sub4 = subgraphByPredicate(
+      graph, [](const Node &node) { return node.getId() == "geralt"; },
+      true // Include neighbors
+  );
+  std::cout << "   Subgraph has " << sub4.getNodes().size() << " nodes and "
+            << sub4.getEdges().size() << " edges" << std::endl;
+  std::cout << "   Nodes: ";
+  for (const auto &node : sub4.getNodes()) {
+    std::cout << node.getId() << " ";
+  }
+  std::cout << std::endl;
+
+  // 7. LLM Context Window
+  printSection("7. LLM Context Window (for Agents)");
+
+  std::cout << "\n[7.1] Get context window for 'geralt' (maxTokens=100, "
+               "minRelevance=0.5):"
+            << std::endl;
+  auto context = getContextWindow(graph, "geralt", 100, 0.5f);
+  std::cout << "   Context window:" << std::endl;
+  std::cout << "   - Center: " << context["center"].get<std::string>()
+            << std::endl;
+  std::cout << "   - Node count: " << context["node_count"].get<size_t>()
+            << std::endl;
+  std::cout << "   - Edge count: " << context["edge_count"].get<size_t>()
+            << std::endl;
+  std::cout << "   - Token count: " << context["token_count"].get<size_t>()
+            << std::endl;
+
+  std::cout << "\n   Nodes in context: ";
+  for (const auto &node : context["nodes"]) {
+    std::cout << node["id"].get<std::string>() << " ";
+  }
+  std::cout << std::endl;
+
+  std::cout << "\n[7.2] Get context window for 'ciri' (maxTokens=200, "
+               "minRelevance=0.8):"
+            << std::endl;
+  auto context2 = getContextWindow(graph, "ciri", 200, 0.8f);
+  std::cout << "   - Center: " << context2["center"].get<std::string>()
+            << std::endl;
+  std::cout << "   - Node count: " << context2["node_count"].get<size_t>()
+            << std::endl;
+  std::cout << "   - Edge count: " << context2["edge_count"].get<size_t>()
+            << std::endl;
+  std::cout << "   - Token count: " << context2["token_count"].get<size_t>()
+            << std::endl;
+
+  // 8. Serialization
+  printSection("8. Serialization");
+
+  std::cout << "\n[8.1] Serialize graph to JSON:" << std::endl;
+  json graphJson = graph.toJson();
+  std::cout << "   Graph JSON size: " << graphJson.dump().size() << " bytes"
+            << std::endl;
+  std::cout << "   Nodes count in JSON: " << graphJson["nodes"].size()
+            << std::endl;
+  std::cout << "   Edges count in JSON: " << graphJson["edges"].size()
+            << std::endl;
+
+  std::cout << "\n[8.2] Deserialize from JSON:" << std::endl;
+  MemoryGraph deserialized = MemoryGraph::fromJson(graphJson);
+  std::cout << "   Deserialized graph has " << deserialized.getNodes().size()
+            << " nodes and " << deserialized.getEdges().size() << " edges"
+            << std::endl;
+
+  // Summary
+  printSection("Summary");
+
+  std::cout << "\n✅ All traversal methods demonstrated successfully!"
+            << std::endl;
+  std::cout << "\nMethods used:" << std::endl;
+  std::cout << "  - bfs()        : BFS traversal with depth limiting"
+            << std::endl;
+  std::cout << "  - dfs()        : DFS traversal with depth limiting"
+            << std::endl;
+  std::cout << "  - shortestPath(): Find shortest path between nodes"
+            << std::endl;
+  std::cout << "  - findAllPaths(): Find all paths between nodes" << std::endl;
+  std::cout << "  - isConnected() : Check graph connectivity" << std::endl;
+  std::cout << "  - hasCycle()    : Detect cycles in the graph" << std::endl;
+  std::cout << "  - topologicalSort(): Order nodes by dependencies"
+            << std::endl;
+  std::cout << "  - findNodesByLabel(): Search nodes by label" << std::endl;
+  std::cout << "  - findNodesByMetadata(): Search nodes by metadata"
+            << std::endl;
+  std::cout << "  - subgraph()    : Extract subgraph by radius" << std::endl;
+  std::cout << "  - subgraphByPredicate(): Extract subgraph by condition"
+            << std::endl;
+  std::cout << "  - getContextWindow(): Get LLM context window" << std::endl;
+
+  std::cout << "\n🎮 Graph represents The Witcher universe with:" << std::endl;
+  std::cout << "   - " << graph.getNodes().size()
+            << " nodes (characters, locations, factions)" << std::endl;
+  std::cout << "   - " << graph.getEdges().size()
+            << " edges (symmetrical & asymmetrical relationships)" << std::endl;
+  std::cout << "   - Multiple relationship types: family, love, training, "
+               "location, etc."
+            << std::endl;
+
+  return 0;
 }
