@@ -392,7 +392,16 @@ MemoryGraph subgraph(const MemoryGraph &graph, const std::string &center,
       }
 
       if (hasBothEndpoints) {
-        subgraph.addEdge(edge);
+        if (edge.isGroupEdge()) {
+          const auto &conn_set =
+              std::get<SymmetricConnections>(edge.getConnections());
+          std::unordered_set<std::string> nodeIds(conn_set.begin(),
+                                                  conn_set.end());
+          subgraph.addGroupEdge(edge.getId(), edge.getLabel(), nodeIds,
+                                edge.getWeight(), edge.getMetadata());
+        } else {
+          subgraph.addEdge(edge);
+        }
       }
     }
   }
@@ -470,7 +479,16 @@ subgraphByPredicate(const MemoryGraph &graph,
     }
 
     if (hasBothEndpoints) {
-      subgraph.addEdge(edge);
+      if (edge.isGroupEdge()) {
+        const auto &conn_set =
+            std::get<SymmetricConnections>(edge.getConnections());
+        std::unordered_set<std::string> nodeIds(conn_set.begin(),
+                                                conn_set.end());
+        subgraph.addGroupEdge(edge.getId(), edge.getLabel(), nodeIds,
+                              edge.getWeight(), edge.getMetadata());
+      } else {
+        subgraph.addEdge(edge);
+      }
     }
   }
 
