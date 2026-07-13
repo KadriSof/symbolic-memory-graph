@@ -27,4 +27,8 @@ add_subdirectory(tests)
 # Examples:
 add_subdirectory(examples)
 
+option(BUILD_PYTHON_BINDINGS "Build Python bindings" OFF)
 
+if(BUILD_PYTHON_BINDINGS)
+  add_subdirectory(bindings)
+endif()
