@@ -3,10 +3,18 @@
 #include "memory_graph/edge.hpp"
 #include "memory_graph/exceptions.hpp"
 #include "memory_graph/node.hpp"
+#include "nlohmann/json.hpp"
 
+#include <cstddef>
+#include <exception>
+#include <pybind11/cast.h>
+#include <pybind11/detail/common.h>
+#include <pybind11/detail/descr.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 
+#include <pyerrors.h>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -31,7 +39,7 @@ public:
         return true;
       }
 
-      if (PyDict_Check(obj.ptr())) {
+      if (py::isinstance<py::dict>(obj)) {
         py::dict dict = obj.cast<py::dict>();
         for (auto item : dict) {
           std::string key = py::str(item.first);
@@ -41,7 +49,7 @@ public:
         return true;
       }
 
-      if (PyList_Check(obj.ptr())) {
+      if (py::isinstance<py::list>(obj)) {
         py::list list = obj.cast<py::list>();
         for (auto item : list) {
           nlohmann::json val = item.cast<nlohmann::json>();
@@ -50,22 +58,22 @@ public:
         return true;
       }
 
-      if (PyUnicode_Check(obj.ptr())) {
+      if (py::isinstance<py::str>(obj)) {
         value = py::str(obj).cast<std::string>();
         return true;
       }
 
-      if (PyLong_Check(obj.ptr())) {
+      if (py::isinstance<py::int_>(obj)) {
         value = py::int_(obj).cast<long long>();
         return true;
       }
 
-      if (PyFloat_Check(obj.ptr())) {
+      if (py::isinstance<py::float_>(obj)) {
         value = py::float_(obj).cast<double>();
         return true;
       }
 
-      if (PyBool_Check(obj.ptr())) {
+      if (py::isinstance<py::bool_>(obj)) {
         value = py::bool_(obj).cast<bool>();
         return true;
       }
