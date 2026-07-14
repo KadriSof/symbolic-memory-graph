@@ -29,8 +29,9 @@ add_subdirectory(tests)
 # Examples:
 add_subdirectory(examples)
 
-option(BUILD_PYTHON_BINDINGS "Build Python bindings" OFF)
+option(BUILD_PYTHON_BINDINGS "Build Python bindings using pybind11" ON)
 
 if(BUILD_PYTHON_BINDINGS)
-  add_subdirectory(bindings)
+    find_package(Python COMPONENTS Interpreter Development REQUIRED)
+    add_subdirectory(bindings)
 endif()
