@@ -1,3 +1,5 @@
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 cmake_minimum_required(VERSION 3.15)
 project (MemoryGraph LANGUAGES CXX VERSION 1.0)
 
