@@ -141,6 +141,13 @@ void init_edge(py::module_ &m);
 void init_memory_graph(py::module_ &m);
 
 PYBIND11_MODULE(memory_graph_core, m) {
+
+#ifdef VERSION_INFO
+  m.attr("__version__") = py::str(VERSION_INFO);
+#else
+  m.attr("__version__") = py::str("unknown");
+#endif
+
   m.doc() = "MemoryGraph - C++ bindings for Python";
 
   // Register exception translations
