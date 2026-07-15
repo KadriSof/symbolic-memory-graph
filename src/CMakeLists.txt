@@ -8,6 +8,8 @@ add_library(memory_graph STATIC
   memory_graph/utils/traversal.cpp
 )
 
+set_target_properties(memory_graph PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 find_package(ZLIB REQUIRED)
 
 # Specify include directories

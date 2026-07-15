@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
-#include <nlohmann/json_fwd.hpp>
 #include <queue>
 #include <stack>
 #include <stdexcept>

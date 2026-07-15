@@ -1,3 +1,4 @@
+
 cmake_minimum_required(VERSION 3.15)
 project (MemoryGraph LANGUAGES CXX VERSION 1.0)
 
@@ -8,7 +9,10 @@ set (CMAKE_CXX_EXTENSIONS OFF)
 
 # Enable testing
 enable_testing()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Position independent Code for Python bindings
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # nlohmann_json interface
 add_library(nlohmann_json INTERFACE)
@@ -27,4 +31,10 @@ add_subdirectory(tests)
 # Examples:
 add_subdirectory(examples)
 
+# Python bindings (optional)
+option(BUILD_PYTHON_BINDINGS "Build Python bindings using pybind11" ON)
 
+if(BUILD_PYTHON_BINDINGS)
+    find_package(Python COMPONENTS Interpreter Development REQUIRED)
+    add_subdirectory(bindings)
+endif()
