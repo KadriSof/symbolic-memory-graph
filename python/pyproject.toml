@@ -1,0 +1,34 @@
+[project]
+name = "memory_graph"
+version = "0.1.0"
+description = "Symbolic memory graph for LLM agents"
+readme = "README.md"
+requires-python = ">=3.8,<3.14"
+authors = [{ name = "Mohamed Sofiene KADRI", email = "ms.kadri.dev@gmail.com" }]
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["memory_graph"]
+
+# Include .so files in the package
+[tool.setuptools.package-data]
+memory_graph = ["*.so", "*.pyd", "*.dylib"]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0", "black>=24.0.0", "pyright>=1.1.0"]
+
+[project.scripts]
+agent = "memory_agent.main:main"
+
+[tool.pyright]
+include = ["src"]
+exclude = ["**/__pycache__", "**/.venv", "**/build"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false
