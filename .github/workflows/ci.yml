@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, feat/*]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # C++ Build and Test
+  build-cpp:
+    name: Build & Test C++
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        compiler: [g++, clang++]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libgtest-dev zlib1g-dev
+
+      - name: Configure CMake
+        run: |
+          mkdir -p build
+          cd build
+          cmake -DBUILD_PYTHON_BINDINGS=OFF ..
+
+      - name: Build
+        run: |
+          cd build
+          cmake --build . --parallel
+
+      - name: Run C++ tests
+        run: |
+          cd build
+          ctest --output-on-failure
+
+  # Python Bindings Build and Test (Multiple Python Versions)
+  build-python:
+    name: Build & Test Python (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential zlib1g-dev
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Setup Python environment
+        run: |
+          cd python
+          uv venv --python ${{ matrix.python-version }}
+          source .venv/bin/activate
+          uv pip install -e .
+
+      - name: Build C++ bindings
+        run: |
+          mkdir -p build
+          cd build
+          source ../python/.venv/bin/activate
+          cmake -DBUILD_PYTHON_BINDINGS=ON \
+                -DPython_EXECUTABLE=$(which python) ..
+          cmake --build . --target memory_graph_core
+
+      - name: Test Python import
+        run: |
+          cd python
+          source .venv/bin/activate
+          python -c "from memory_graph import MemoryGraph, Node, Edge; print('✅ Import works!')"
+
+  # Linting & Formatting
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install clang-format
+        run: sudo apt-get install -y clang-format
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install Python dev dependencies
+        run: |
+          cd python
+          uv venv
+          source .venv/bin/activate
+          uv pip install black pyright
+
+      - name: Check C++ formatting
+        run: |
+          find . -name "*.cpp" -o -name "*.hpp" | grep -v "build\|pybind11\|third_party" | xargs clang-format --dry-run --Werror
+
+      - name: Check Python formatting
+        run: |
+          cd python
+          source .venv/bin/activate
+          black --check src/
+
+      - name: Run Pyright type checker
+        run: |
+          cd python
+          source .venv/bin/activate
+          pyright src/
