@@ -21,11 +21,9 @@ try:
     )
 except ImportError as e:
     raise ImportError(
-        "MemoryGraph core module not found. Please ensure:\n"
-        "  1. The C++ bindings are built:\n"
-        "     cd build && cmake -DBUILD_PYTHON_BINDINGS=ON .. && cmake --build . --target memory_graph_core\n"
-        "  2. The .so file is copied to this directory:\n"
-        "     cp build/bindings/memory_graph_core*.so python/src/memory_graph/\n"
+        "MemoryGraph core module not found. Please build the C++ bindings:\n"
+        "  cd build && cmake -DBUILD_PYTHON_BINDINGS=ON .. && cmake --build . --target memory_graph_core\n"
+        "  cp build/bindings/memory_graph_core*.so python/src/memory_graph/\n"
         f"  Original error: {e}"
     ) from e
 
