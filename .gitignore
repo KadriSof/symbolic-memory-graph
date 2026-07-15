@@ -1,33 +1,38 @@
-# Compiled Object files
-*.o
-*.obj
-*.out
-*.exe
+# Build
+build/
+cmake-build-*/
 *.a
 *.so
 *.dylib
+*.dll
 
-# Build directories
-build/
-cmake-build-*/
-Debug/
-Release/
-x64/
-x86/
+# Python
+python/.venv/
+python/__pycache__/
+python/**/__pycache__/
+python/*.egg-info/
+python/**/*.egg-info/
+python/.pytest_cache/
+python/.mypy_cache/
+python/.ruff_cache/
+python/src/memory_graph/*.so
+python/src/memory_graph/*.dylib
+python/src/memory_graph/*.pyd
 
-# IDE and Editor files
+# C++
+*.o
+*.obj
+*.exe
+*.out
+*.app
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-
-# CMake files
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-
-# OS generated files
 .DS_Store
-Thumbs.db
+
+# Testing
+*.log
+*.tmp
