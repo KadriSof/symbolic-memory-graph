@@ -5,7 +5,6 @@
 #include "nlohmann/json.hpp"
 #include <cstddef>
 #include <functional>
-#include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <vector>
 
