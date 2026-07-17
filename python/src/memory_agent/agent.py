@@ -5,7 +5,6 @@ The Cogito Patter extends ReAct by making Symbolic memory intrinsic to reasoning
 The agent thinks through the graph, not just the prompt.
 """
 
-from ast import keyword
 import json
 import logging
 
@@ -65,14 +64,17 @@ class intent:
     requires_tools: bool = False
     complexity: str = "simple"  # "simple", "moderate", "complex"
 
+
 @dataclass
 class ConsolidationResult:
     """Result of the consolidation step."""
+
     current_knowledge: str
     new_information: list[Primitive]
     gaps: list[str]
     updates: list[dict[str, Any]]
     confidence_adjustments: list[dict[str, Any]]
+
 
 @dataclass
 class ReasoningResult:
@@ -410,7 +412,7 @@ class CogitoAgent:
     # Step 2: RETRIEVE
     def _retrieve(self, primitives: dict[str, Any]) -> str:
         """Retrieve relevant context from the memory graph"""
-        entities = primitieves.get("entities", [])
+        entities = primitives.get("entities", [])
         keywords = self._extract_keywords(entities)
 
         # Build context
@@ -432,7 +434,9 @@ class CogitoAgent:
                 neighbors = self.memory.get_neighbors(node_id=entity_id)
 
                 # Add node description
-                context_parts.append(f"Entity: {node.get_id()} (label: {node.get_label()})")
+                context_parts.append(
+                    f"Entity: {node.get_id()} (label: {node.get_label()})"
+                )
                 context_parts.append(f"--Metadata: {json.dumps(node.get_metadata())}")
 
                 # Add connections
@@ -451,14 +455,16 @@ class CogitoAgent:
         for edge in group_edges:
             if edge.is_group_edge():
                 members = self.memory.get_group_members(group_id=edge.get_id())
-                context_parts.append(f"Group: {edge.get_label()} (members: {', '.join(members)}")
+                context_parts.append(
+                    f"Group: {edge.get_label()} (members: {', '.join(members)}"
+                )
 
         # Add full graph if manageable
         node_count = len(self.memory.get_nodes())  # this can be pre-computed
         if node_count < 50:
             context_parts.append("\nFull graph summary:")
             context_parts.append(f"--Total nodes: {node_count}")
-            context_parts.append(f"--Total edges: {len(self.memory.get_edges())")
+            context_parts.append(f"--Total edges: {len(self.memory.get_edges())}")
 
         # Also add fuzzy search results
         # TODO: [PRIORITY:High] Verify whether we can implement fuzzy retrieval on the graph level.
@@ -468,37 +474,45 @@ class CogitoAgent:
                 context_parts.append("\nFuzzy search results.")
                 context_parts.extend(fuzzy_results)
 
-        return "\n".join(context_parts) if context_parts else "No relevant context found."
+        return (
+            "\n".join(context_parts) if context_parts else "No relevant context found."
+        )
 
     # Step 3: CONSOLIDATE
-    def _consolidate(self, primitives: dict[str, Any], context: str) -> ConsolidationResult:
+    def _consolidate(
+        self, primitives: dict[str, Any], context: str
+    ) -> ConsolidationResult:
         """Consolidate new information with existing knowledge"""
         try:
             # Analyze and consolidate
-            result = self._llm_structured(query=Prompts.consolidate(
-                context=context,
-                new_primitives=json.dumps(primitives),
-                query=context[:500]  # Context as a query
-            ))
+            result = self._llm_structured(
+                prompt=Prompts.consolidate(
+                    context=context,
+                    new_primitives=json.dumps(primitives),
+                    query=context[:500],  # Context as a query
+                )
+            )
 
             # Parse the result
             new_info = []
             for item in result.get("new_information", []):
-                new_info.append(Primitive(
-                    primitive_type=item.get("type", "entity"),
-                    data=item.get("data", {}),
-                    confidence=item.get("confidence", 0.5),
-                    source="llm_consolidation"
-                ))
+                new_info.append(
+                    Primitive(
+                        primitive_type=item.get("type", "entity"),
+                        data=item.get("data", {}),
+                        confidence=item.get("confidence", 0.5),
+                        source="llm_consolidation",
+                    )
+                )
 
             return ConsolidationResult(
-                current_knowledge=result.get("knowledge_summary"),
+                current_knowledge=result.get("knowledge_summary", ""),
                 new_information=new_info,
                 gaps=result.get("gaps", []),
                 updates=result.get("updates", []),
-                confidence_adjustments=result.get("confidence_adjustments", [])
+                confidence_adjustments=result.get("confidence_adjustments", []),
             )
-        
+
         except Exception as e:
             logger.error(f"[CogitoAgent] Consolidation failed:\n---\n{e}\n---")
             return ConsolidationResult(
@@ -506,11 +520,17 @@ class CogitoAgent:
                 new_information=[],
                 gaps=[],
                 updates=[],
-                confidence_adjustments=[]
+                confidence_adjustments=[],
             )
 
     # Step 4: REASON
-    def _reason(self, query: str, context: str, consolidated: ConsolidationResult, tool_results: list[dict[str, Any]] | None = None) -> ReasoningResult:
+    def _reason(
+        self,
+        query: str,
+        context: str,
+        consolidated: ConsolidationResult,
+        tool_results: list[dict[str, Any]] | None = None,
+    ) -> ReasoningResult:
         """Reason using the consolidated graph."""
         try:
             # Fill gaps using tools if needed
@@ -520,12 +540,14 @@ class CogitoAgent:
                 tool_results = tool_output
 
             # Generate reasoning
-            reasoning_text = self._llm_call(query=Prompts.reason(
-                query=query,
-                context=context,
-                gaps=json.dumps(consolidated.gaps),
-                tool_results=json.dumps(tool_results) if tool_results else None
-            ))
+            reasoning_text = self._llm_call(
+                prompt=Prompts.reason(
+                    query=query,
+                    context=context,
+                    gaps=json.dumps(consolidated.gaps),
+                    tool_results=json.dumps(tool_results) if tool_results else None,
+                )
+            )
 
             # Parse reasoning
             # (For now, we will treat it as text. Otherwise, it should parse the structure from the LLM output)
@@ -539,31 +561,124 @@ class CogitoAgent:
                 reasoning_trace=reasoning_text,
                 solution=solution,
                 tool_results=tool_results,
-                confidence=confidence
+                confidence=confidence,
             )
-        
+
         except Exception as e:
             logger.error(f"[CogitoAgent] Reasoning failed:\n---\n{e}\n---")
             return ReasoningResult(
                 reasoning_trace="",
                 solution="I encountered an issue while reasoning. Could you rephrase your question?",
-                confidence=0.3
+                confidence=0.3,
             )
 
-    def _update_memory(self, something):
+    # Step 5: UPDATE
+    def _update_memory(self, consolidated: ConsolidationResult):
+        """Update the memory graph with new information"""
+        for update in consolidated.updates:
+            update_type = update.get("type")
+            data = update.get("data", {})
+            confidence = data.get("confidence", 0.5)
+
+            # Skip low confidence updates
+            if confidence < self.confidence_threshold:
+                logger.debug(
+                    f"[CogitoAgent] Skipping update with low confidence: {confidence}"
+                )
+                continue
+
+            try:
+                if update_type == "add" or update_type == "modify":
+                    self.apply_update(data)
+                elif update_type == "conflict":
+                    self._handle_conflict(data)
+
+            except Exception as e:
+                logger.error(f"[CogitoAgent] Failed to appy update: {e}")
         pass
 
-    def _respond(self, something):
-        pass
+    # Step 6: RESPOND
+    def _respond(self, reasoning_result: ReasoningResult, context: str) -> str:
+        """Synthesize a response from the reasoning."""
+        try:
+            response = self._llm_call(
+                Prompts.synthesize_response(
+                    reasoning=reasoning_result.reasoning_trace,
+                    solution=reasoning_result.solution,
+                    confidence=reasoning_result.confidence,
+                    graph_context=context[:1000],  # Limit context
+                )
+            )
 
-    def _react_loop(self, query: str, d: dict):
-        return {}
+            return response.strip()
 
-    def _llm_call(self, query):
-        pass
+        except Exception as e:
+            logger.error(f"Response synthesis failed: {e}")
+            return reasoning_result.solution
 
-    def _llm_structured(self, query):
-        pass
+    # ReAct Loop (Fallback)
+    # TODO: Use the memory agent project ccode
+    def _react_loop(self, query: str, comprehended: dict[str, Any]) -> str:
+        """Simple ReAct loop for straightforward tasks."""
+        # Simple ReAct: reason → act → observe → respond
+        try:
+            # Think
+            thought = self._llm_call(f"Think about this query: {query}")
+
+            # Check if tools are needed
+            if self.tools and "tool" in thought.lower():
+                tool_result = self._call_tools([query])
+                # Observe
+                observation = self._llm_call(
+                    f"Tool result: {tool_result}\nQuery: {query}"
+                )
+            else:
+                observation = thought
+
+            # Respond
+            response = self._llm_call(f"Respond to: {query}\nBased on: {observation}")
+            return response.strip()
+
+        except Exception as e:
+            logger.error(f"ReAct loop failed: {e}")
+            return (
+                "I encountered an issue processing your request. Could you rephrase it?"
+            )
+
+    # LLM Helpers
+    def _llm_call(self, prompt: str) -> str:
+        """Call the LLM with a prompt."""
+        messages = [
+            {
+                "role": "system",
+                "content": "You are the Cogito Agent, a reasoning agent with symbolic memory.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+        return self.llm.chat(messages)
+
+    def _llm_structured(self, prompt: str) -> dict[str, Any]:
+        """Call the LLM and parse structured output."""
+        messages = [
+            {
+                "role": "system",
+                "content": "You are the Cogito Agent, a reasoning agent with symbolic memory. Return valid JSON.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+        response = self.llm.chat(messages)
+
+        try:
+            # Try to parse JSON from response
+            # Find JSON block
+            start = response.find("{")
+            end = response.rfind("}") + 1
+            if start >= 0 and end > start:
+                json_str = response[start:end]
+                return json.loads(json_str)
+            return {"raw": response}
+        except json.JSONDecodeError:
+            return {"raw": response}
 
     def _parse_primitives(self, data: dict[str, Any]) -> dict[str, Any]:
         """Parse extracted primitives"""
@@ -608,26 +723,157 @@ class CogitoAgent:
                 if tool_name in gap.lower():
                     try:
                         result = tool_func(gap)
-                        results.append({
-                            "tool": tool_name,
-                            "gap": gap,
-                            "result": result,
-                            "success": True
-                        })
+                        results.append(
+                            {
+                                "tool": tool_name,
+                                "gap": gap,
+                                "result": result,
+                                "success": True,
+                            }
+                        )
                         break
 
                     except Exception as e:
-                        results.append({
-                            "tool": tool_name,
-                            "gap": gap,
-                            "error": str(e),
-                            "success": False
-                        })
+                        results.append(
+                            {
+                                "tool": tool_name,
+                                "gap": gap,
+                                "error": str(e),
+                                "success": False,
+                            }
+                        )
 
         return results
 
-    def _extract_solution(self, reasoning_text):
-        pass
+    # TODO: Use structured output for extraction or special markers
+    def _extract_solution(self, reasoning_text: str) -> str:
+        """Extract solution from reasoning text."""
+        if "solutin:" in reasoning_text:
+            parts = reasoning_text.split("Solution:")
+            return parts[-1].strip() if len(parts) > 1 else reasoning_text
+        return reasoning_text
 
-    def _estimate_confidence(self, reasoning_text, consolidated):
-        pass
+    def _estimate_confidence(
+        self, reasoning_text: str, consolidated: ConsolidationResult
+    ) -> float:
+        """Estrimate confidence in the reasoning"""
+        # Simple heuristic to check for uncertainty markers (for now)
+        uncertainty_markers = [
+            "I am not sure",
+            "I think",
+            "maybe",
+            "possibility",
+            "could be",
+        ]
+        uncertainty_count = sum(
+            1 for m in uncertainty_markers if m in reasoning_text.lower()
+        )
+
+        # Higher confidence with fewer uncertainty markers
+        base_confidence = 0.9
+        confidence = max(0.3, base_confidence - (uncertainty_count * 0.1))
+
+        # Adjust based on consolidated confidence
+        if consolidated.new_information:
+            avg_confidence = sum(
+                i.confidence for i in consolidated.new_information
+            ) / len(consolidated.new_information)
+            confidence = (confidence + avg_confidence) / 2
+
+        return min(1.0, confidence)
+
+    def apply_update(self, data: dict[str, Any]):
+        """Apply a single update to the graph"""
+        primitive_type = data.get("type")
+
+        if primitive_type == "entity":
+            # Add or update node
+            entity_id = data.get("id", "")
+            label = data.get("label", entity_id)
+            metadata = data.get("metadata", {})
+
+            if self.memory.has_node(node_id=entity_id):
+                # Update existing node
+                node = self.memory.get_node(node_id=entity_id)
+                # Update metadata
+                node.update_metadata("updated_at", datetime.now().isoformat())
+                for key, value in metadata.items:
+                    node.update_metadata(key, value)
+                node.set_label(label=label)
+
+            else:
+                # Create new node
+                node = Node(id=entity_id, label=label, metadata=metadata)
+                self.memory.add_node(node=node)
+
+        elif primitive_type == "relation":
+            # Add edge
+            source = data.get("source", "")
+            target = data.get("target", "")
+            label = data.get("label", "")
+            direction = data.get("direction", "asymmetric")
+            weight = data.get("weight", 0.8)
+            metadata = data.get("metadata", {})
+
+            if direction == "symmetric":
+                # Use group edge for symmetric (will group edge work for bidirectional relations)
+                self.memory.add_group_edge(
+                    id=f"{source}_{target}",
+                    label=label,
+                    node_ids={source, target},
+                    weight=weight,
+                    metadata=metadata,
+                )
+            else:
+                # Use symmetric edge with exactly 2 nodes
+                from memory_graph import EdgeType
+
+                conn = AsymmetricConnections((source, target))
+                edge = Edge(
+                    id=f"{source}_{target}",
+                    label=label,
+                    type=EdgeType.ASYMMETRIC,
+                    connections=conn,
+                    weight=weight,
+                    metadata=metadata,
+                )
+                self.memory.add_edge(edge)
+
+            logger.info(f"  Updated relation: {source} → {target} ({label})")
+
+    def _handle_conflict(self, data: dict[str, Any]):
+        """Handle a conflict in the graph."""
+        existing = data.get("existing", {})
+        new = data.get("new", {})
+
+        # Log conflict for review
+        logger.warning("Conflict detected:")
+        logger.warning(f"  Existing: {existing}")
+        logger.warning(f"  New: {new}")
+
+        # Store conflict in graph metadata for later resolution
+        conflict_node = Node(
+            id=f"conflict_{datetime.now().timestamp()}",
+            label="Conflict",
+            metadata={
+                "type": "conflict",
+                "existing": existing,
+                "new": new,
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+        self.memory.add_node(conflict_node)
+
+    # Utilities
+    def save_memory(self, filepath: str):
+        """Save the memory graph to a file."""
+        with open(filepath, "w") as f:
+            json.dump(self.memory.to_json(), f, indent=2)
+        logger.info(f"Memory saved to {filepath}")
+
+    def load_memory(self, filepath: str):
+        """Load a memory graph from a file."""
+        with open(filepath, "r") as f:
+            data = json.load(f)
+            self.memory = MemoryGraph.from_json(data)
+        logger.info(f"Memory loaded from {filepath}")
