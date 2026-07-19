@@ -16,6 +16,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from groq import Groq as GroqClient
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from .base import BaseLLM, GenerationConfig, Messages
 
@@ -85,6 +86,9 @@ class GroqLLM(BaseLLM):
 
         self.logger.info(f"Initialized with model: {self.model}")
 
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
     def chat(self, messages: Messages) -> str:
         """
         Generate a chat completion from messages.
