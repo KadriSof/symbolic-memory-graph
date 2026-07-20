@@ -5,6 +5,7 @@ The Cogito Patter extends ReAct by making Symbolic memory intrinsic to reasoning
 The agent thinks through the graph, not just the prompt.
 """
 
+from ast import comprehension
 import json
 import logging
 
@@ -12,21 +13,38 @@ from datetime import datetime
 
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from memory_graph import (
     MemoryGraph,
     Node,
     Edge,
     EdgeType,
-    SymmetricConnections,
-    AsymmetricConnections,
 )
+
+from memory_agent.llm.base import BaseLLM, RoleType
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# Constants and Markers
+# 1. React Markers
+MARKER_THOUGHT = "THOUGHT"
+MARKER_ACTION = "ACTION"
+MARKER_ACTION_INPUT = "ACTION-INPUT"
+MARKER_FINAL_ANSWER = "FINAL-ANSWER"
+# 2. Cogito Markers
+MARKER_COMPREHEND = "COMPREHEND"
+MARKER_RETRIEVE = "RETRIEVE"
+MARKER_CONSOLIDATE = "CONSOLIDATE"
+MARKER_REASON = "REASON"
+MARKER_UPDATE = "UPDATE"
+MARKER_RESPOND = "RESPOND"
+MARKER_ERROR = "ERROR"
+
+
+# Data Models
 class PathType(Enum):
     """The reasoning path the agent can take."""
 
@@ -34,24 +52,69 @@ class PathType(Enum):
     COGITO = "cogito"  # Full Cogito: comprehend -> retrieve -> consolidate -> reason -> update -> respond
 
 
-class Confidence(Enum):
-    """Confidence levels for knowledge."""
+@dataclass
+class CogitoState:
+    """Single source of truth for agent state."""
 
-    CERTAIN = 1.0
-    HIGH = 0.9
-    MEDIUM = 0.7
-    LOW = 0.5
-    SPECULATIVE = 0.3
+    messages: list[dict[str, str]] = field(default_factory=list)
+    thoughts: list[str] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    graph_snapshots: list[dict[str, Any]] = field(default_factory=list)
+    confidence_history: list[float] = field(default_factory=list)
+    current_mode: str = "REACT"
+    mode_history: list[dict[str, str]] = field(
+        default_factory=list
+    )  # Track mode changes
+    active_context: str | None = None  # "lore_building", "coding_project", etc.
+    session_entities: list[str] = field(default_factory=list)
+
+    def add_messages(self, role: str, content: str, tool: str | None = None) -> None:
+        """Add a message to the conversation history."""
+        msg = {"role": role, "content": content}
+        if tool:
+            msg["tool"] = tool
+        self.messages.append(msg)
+
+    def add_thought(self, thought: str) -> None:
+        """Add a reasoning thought."""
+        self.thoughts.append(thought)
+
+    def add_tool_call(self, tool_name: str, args: dict[str, Any]) -> None:
+        """Record a tool call."""
+        self.tool_calls.append(
+            {"tool": tool_name, "args": args, "timestamp": datetime.now().isoformat()}
+        )
+
+    def add_graph_snapshot(self, nodes: int, edges: int) -> None:
+        """Record a graph snapshot for traceability."""
+        self.graph_snapshots.append(
+            {"nodes": nodes, "edges": edges, "timestamp": datetime.now().isoformat()}
+        )
+
+    def set_mode(self, new_mode: str, context: str) -> None:
+        """Switch mode with a reason for traceability"""
+        self.mode_history.append(
+            {
+                "from": self.current_mode,
+                "to": new_mode,
+                "context": context,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        self.current_mode = new_mode
+        self.active_context = context
 
 
 @dataclass
-class Primitive:
-    """A graph primitive extracted from text."""
+class Tool:
+    """Simple callable tool abstraction."""
 
-    primitive_type: str  # "entity", "relation", "attribute"
-    data: dict[str, Any]
-    confidence: float = 0.7
-    source: str = "llm_extraction"
+    name: str
+    description: str
+    fn: Callable[..., str]
+
+    def execute(self, **kwargs: Any) -> Any:
+        return self.fn(**kwargs)
 
 
 @dataclass
@@ -70,10 +133,10 @@ class ConsolidationResult:
     """Result of the consolidation step."""
 
     current_knowledge: str
-    new_information: list[Primitive]
+    new_information: list[dict[str, Any]]
     gaps: list[str]
     updates: list[dict[str, Any]]
-    confidence_adjustments: list[dict[str, Any]]
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -82,47 +145,111 @@ class ReasoningResult:
 
     reasoning_trace: str
     solution: str
-    tool_results: list[dict[str, Any]] | None = None
     confidence: float = 1.0
-
-
-class LLMInterface:
-    """Abstract interface for LLM providers."""
-
-    def __init__(self, model: str = "gpt-4", temprature: float = 0.7):
-        self.model = model
-        self.temprature = temprature
-
-    def chat(self, messages: list[dict[str, str]]) -> str:
-        """Send a chat message to the LLM"""
-        raise NotImplementedError
-
-    def structured_output(
-        self, messages: list[dict[str, str]], schema: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Get structured output from the LLM."""
-        raise NotImplementedError
+    tool_results: list[dict[str, Any]] | None = None
 
 
 class Prompts:
     """Prompt templates for the Cogito Agent."""
 
     @staticmethod
-    def reconstruct_query(query: str) -> str:
+    def react(query: str, tools: list) -> str:
         return f"""
-        You are a precise analyzer. Reconstruct the user's query to ensure full comprehnsion.
+        You are a ReAct reasoning agent.
 
-        User query: 
+        You solve tasks by iteratively reasoning and using tools.
+
+        You have access to the following tools:
+        {tools}
+
+        You must follow the ReAct trajectory format exactly using the specified markers.
+
+        A reasoning trajectory follows this structure:
+        <THOUGHT> reason about the current situation </THOUGHT>
+        <ACTION> the tool to execute </ACTION>
+        <ACTION-INPUT> {{"key": "value"}} </ACTION-INPUT>
+
+        Observation: result returned by the tool
+
+        When you have enough information to answer the user, respond with:
+        <THOUGHT> I now know the final answer </THOUGHT>
+        <FINAL-ANSWER> the final response to the user </FINAL-ANSWER>
+
+        Rules:
+        - Never invent tool observations.
+        - Action Input must always be valid JSON.
+        - Keep thoughts concise and task-oriented.
+        """
+
+    @staticmethod
+    def comprehend_query(query: str) -> str:
+        return f"""
+        You are a precise query analyzer for a cognitive agent with symbolic memory.
+
+        **IMPORTANT: Your goal is to choose the SIMPLEST path that correctly handles the query.**
+        - REACT is fast, cheap, and sufficient for most queries.
+        - COGITO is powerful but expensive — use it ONLY when absolutely necessary.
+
+        Original user query:
         ---
         {query}
         ---
 
-        Reconstruct the query by:
-        1. Indentifying the core intent
-        2. Clarifying any ambiguities
-        3. Rephrasing for clarity
+        Analyze the query and return a JSON object with the following fields:
 
-        Return the reconstructed query.
+        1. **reconstructed_query** (string): Rephrase the query for full comprehension.
+        2. **user_intent** (string): "ask" | "task" | "clarify" | "correct"
+        3. **modus_operandi** (string): "REACT" or "COGITO"
+        4. **active_context** (string): Classify the overall context:
+        - "question_answering": Simple Q&A, no ongoing project
+        - "lore_building": World-building, story creation, character development
+        - "coding_project": Software development, API design, debugging
+        - "research": Information gathering, analysis, comparison
+        - "planning": Strategy, roadmap, task breakdown
+        - "analysis": Deep dive into a topic, relationship mapping
+        - "casual": General chat, no specific context
+
+        **DECISION RULES for modus_operandi:**
+
+        ## USE "REACT" (Simple, fast, cheap) when:
+        - Factual questions: "What is the capital of France?"
+        - Direct calculations: "What is 2 + 2?"
+        - Simple translations: "Say hello in Spanish"
+        - Single-step tool calls: "Get the weather in Paris"
+        - Database queries: "Return the number of rows in the students column"
+        - Direct lookups: "Find the user with ID 123"
+        - No relationships between multiple entities
+        - No need for memory or context from previous conversations
+
+        ## USE "COGITO" (Complex, powerful, expensive) ONLY when:
+        - The query explicitly asks about RELATIONSHIPS between entities
+        - The query requires building UNDERSTANDING, not just retrieval
+        - The query is about CONNECTIONS: "How is X connected to Y?"
+        - The query requires DETECTING CONTRADICTIONS
+        - The query involves MULTI-STEP reasoning with memory
+        - The query is EXPLICITLY about the agent's memory: "What do you know about X?"
+        - The query involves BUILDING a mental model: "Tell me about X and Y"
+
+        **Key principle: When in doubt, choose REACT.** COGITO is a powerful tool, but it should be used sparingly.
+
+        Return ONLY valid JSON, no additional text.
+
+        Example outputs:
+        1. Simple query → REACT:
+        {{
+            "reconstructed_query": "What is the capital of Tunisia?",
+            "user_intent": "ask",
+            "modus_operandi": "REACT",
+            "active_context": "question_answering"
+        }}
+
+        2. Complex query → COGITO:
+        {{
+            "reconstructed_query": "What is the relationship between Geralt and Yennefer?",
+            "user_intent": "ask",
+            "modus_operandi": "COGITO",
+            "active_context" "lore_building"
+        }}
         """
 
     @staticmethod
@@ -142,25 +269,6 @@ class Prompts:
             "attributes": [{{"entity": "...", "key": "...", "value": "..."}}],
             "intent": "ask|task|clarify|correct"
         }}
-        """
-
-    @staticmethod
-    def classify_complexity(primitives: str, query: str) -> str:
-        return f"""
-        Classify the complexity of this query.
-
-        Query:
-        ---
-        {query}
-        ---
-        primitives: {primitives}
-
-        Complexity levels:
-        - simple: Single fact retrieval or simple question
-        - moderate: Multi-step reasoning or comparison
-        - complex: Requires building understanding, detecting contradictions, or multi-turn reasoning
-        
-        Return only: "simple", "moderate", "complex"
         """
 
     @staticmethod
@@ -269,9 +377,9 @@ class CogitoAgent:
 
     def __init__(
         self,
-        llm: LLMInterface,
+        llm: BaseLLM,
         memory_graph: MemoryGraph | None = None,
-        tools: dict[str, Any] | None = None,
+        tools: list[Tool] | None = None,
         config: dict[str, Any] | None = None,
     ) -> None:
         """
@@ -285,23 +393,19 @@ class CogitoAgent:
         """
         self.llm = llm
         self.memory = memory_graph or MemoryGraph({"type": "cogito_agent"})
-        self.tools = tools or {}
+        self.tools = {t.name: t for t in (tools or [])}
         self.config = config or {}
 
         # State tracking
-        self.conversation_history: list[dict[str, str]] = []
-        self.context_window: list[str] = []
+        self.state = CogitoState()
         self.confidence_threshold = self.config.get("confidence_threshold", 0.6)
-        self.max_context_nodes = self.config.get("max_context_nodes", 100)
-        self.max_graph_depth = self.config.get("max_graph_depth", 3)
+        self.max_steps = self.config.get("max_steps", 10)
+        self.debug = self.config.get("debug", False)
+        self.llm_calls = 0
 
-        logger.info("[CogitoAgent] Cogito Agent initialized")
-        logger.info(f"[CogitoAgent] Memory node: {len(self.memory.get_nodes())}")
-        logger.info(f"[CogitoAgent] Memory edges: {len(self.memory.get_edges())}")
-        logger.info(
-            f"[CogitoAgent] Tools: {list(self.tools.keys()) if self.tools else 'None'}"
-        )
+        self._log_init()
 
+    # PUBLIC API
     def process_query(self, user_query: str) -> str:
         """
         Process a user query through the Cogito loop.
@@ -313,166 +417,115 @@ class CogitoAgent:
             The agent's response
         """
 
-        logger.info(
-            f"[CogitoAgent:process_query] Processing query:\n---{user_query[:100]}\n---"
-        )
+        self._log_debug(f"Processing query: {user_query[:100]}...")
 
         # Step 1: COMPREHEND
-        comprehended = self._comprehend(user_query)
-        logger.info(f"[CogitoAgent] Path: {comprehended['path']}")
+        comprehension_ = self._comprehend(user_query)
+        reconstructed_query = comprehension_.get("reconstructed", user_query)
 
-        if comprehended["path"] == PathType.REACT:
-            return self._react_loop(user_query, comprehended)
+        # Step 2: Determine path
+        if comprehension_.get("path", "REACT") == PathType.REACT:
+            return self._react_loop(reconstructed_query)
 
-        # Step 2: RETRIEVE
-        context = self._retrieve(comprehended["primitives"])
-        logger.info(f"[CogitoAgent] Retrieved: {len(context)} characters of context")
+        # Step 3: RETRIEVE
+        context = self._retrieve(comprehension_.get("primitives", {}))
 
-        # Step 3: CONSOLIDATE
-        consolidated = self._consolidate(comprehended["primitives"], context)
-        logger.info(
-            f"[CogitoAgent] New info: {len(consolidated.new_information)} items"
-        )
-        logger.info(f"[CogitoAgent] Gaps: {len(consolidated.gaps)} items")
+        # Step 4: CONSOLIDATE
+        consolidated = self._consolidate(comprehension_.get("primitives", {}), context)
 
-        # Step 4: REASON
+        # Step 5: REASON
         reasoning_result = self._reason(
-            query=user_query,
+            query=reconstructed_query,
             context=context,
             consolidated=consolidated,
-            tool_results=None,  # Will be filled if tools are called
-        )
-        logger.info(
-            f"[CogitoAgent] Reasoning confidence: {reasoning_result.confidence}"
         )
 
-        # Step 5: Update
-        if consolidated.updates:
+        # Step 6: UPDATE
+        if consolidated.updates or consolidated.conflicts:
             self._update_memory(consolidated)
-            logger.info(
-                f"[CogitoAgent] Memory updated: {len(consolidated.updates)} items"
-            )
 
-        # Step 6: RESPOND
+        # Step 7: RESPOND
         response = self._respond(reasoning_result, context)
-        logger.info(f"[CogitoAgent] Response length: {len(response)} characters")
 
-        # Update conversation history
-        self.conversation_history.append(
-            {
-                "user": user_query,
-                "assistant": response,
-                "timestamp": datetime.now().isoformat(),
-                "path": comprehended["path"].value,
-            }
-        )
+        # Record history
+        self.state.add_messages("assistant", response)
 
         return response
 
-    def _comprehend(self, query: str):
-        """Comprehend the user query."""
+    def _comprehend(self, query: str) -> dict[str, Any]:
+        """Comprehend the user query and determine complexity."""
         try:
-            # 1. Reconstruct query
-            reconstructed = self._llm_call(Prompts.reconstruct_query(query=query))
+            # 1. Comprehend the query for better understanding
+            comprehension = self._llm_structured(query=Prompts.comprehend_query(query))
+
+            # 2. Update state mode (modus operandi)
+            modus_operandi = comprehension.get("modus_operandi", "REACT")
+            reconstructed_query = comprehension.get("reconstructed_query", query)
+            active_context = comprehension.get("active_context", "")
+            self.state.add_messages(role="USER", content=query)
+            self.state.set_mode(new_mode=modus_operandi, context=active_context)
 
             # 2. Extract primitives
-            primitives_json = self._llm_structured(
-                Prompts.extract_primitives(query=query)
-            )
-            primitives = self._parse_primitives(primitives_json)
-
-            # 3. Classify complexity
-            complexity = self._llm_structured(
-                Prompts.classify_complexity(
-                    primitives=json.dumps(primitives), query=query
-                )
-            )
-
-            # Determine path
-            if complexity.get("complexity") == "complex" or primitives.get(
-                "intent"
-            ) in ["task"]:
+            if modus_operandi == "COGITO":
                 path = PathType.COGITO
+                primitives = self.extract_primitives(query)
             else:
                 path = PathType.REACT
+                primitives = {}
+
+            # 3. Track session entities
+            if primitives:
+                for entity in primitives.get("entities", []):
+                    entity_id = entity.get("id")
+                    if entity_id and entity_id not in self.state.session_entities:
+                        self.state.session_entities.append(entity_id)
 
             return {
                 "path": path,
                 "primitives": primitives,
-                "intent": primitives.get("intent"),
-                "reconstructed": reconstructed,
-                "complexity": complexity,
+                "intent": primitives.get("intent", "ask"),
+                "reconstructed": reconstructed_query,
             }
 
         except Exception as e:
             logger.error(f"[CogitoAgent] Comprehension failed: {e}")
             # Fallback to simple ReAct
-            return {"path": PathType.REACT, "primitives": {}}
+            return {
+                "path": PathType.REACT,
+                "primitives": {},
+            }
 
     # Step 2: RETRIEVE
     def _retrieve(self, primitives: dict[str, Any]) -> str:
         """Retrieve relevant context from the memory graph"""
         entities = primitives.get("entities", [])
-        keywords = self._extract_keywords(entities)
-
-        # Build context
         context_parts = []
 
-        # Search for relevant nodes
-        visited = set()
         for entity in entities:
             entity_id = entity.get("id")
             if not entity_id:
                 continue
-            if entity_id in visited:
+
+            if not self.memory.has_node(entity_id):
                 continue
-            visited.add(entity_id)
 
-            # Get node and neighbors
-            if self.memory.has_node(node_id=entity_id):
-                node = self.memory.get_node(node_id=entity_id)
-                neighbors = self.memory.get_neighbors(node_id=entity_id)
+            node = self.memory.get_node(entity_id)
+            neighbors = self.memory.get_neighbors(entity_id)
 
-                # Add node description
-                context_parts.append(
-                    f"Entity: {node.get_id()} (label: {node.get_label()})"
-                )
-                context_parts.append(f"--Metadata: {json.dumps(node.get_metadata())}")
+            # TODO: [QUESTION] Why are we building the context parts as list?
+            context_parts.append(f"Entity: {node.get_id()} (label: {node.get_label()})")
+            context_parts.append(f" Metadata: {json.dumps(node.get_metadata())}")
 
-                # Add connections
-                if neighbors:
-                    neighbor_desc = ", ".join([n.get_label() for n in neighbors[:5]])
-                    context_parts.append(f"--Connections: {neighbor_desc}")
+            if neighbors:
+                # TODO: [PERSPECTIVE] How can a Cypher solve the data representation issue?
+                neighbor_desc = ",".join([n.get_label() for n in neighbors[:5]])
+                context_parts.append(f" Connections: {neighbor_desc}")
 
-                # Add edges
-                edges = [e for e in self.memory.get_edges() if entity_id in e.get_id()]
-                if edges:
-                    edge_desc = ", ".join([e.get_label() for e in edges[:3]])
-                    context_parts.append(f"--Relations: {edge_desc}")
-
-        # Add group memberships
-        group_edges = self.memory.get_group_edges()
-        for edge in group_edges:
-            if edge.is_group_edge():
-                members = self.memory.get_group_members(group_id=edge.get_id())
-                context_parts.append(
-                    f"Group: {edge.get_label()} (members: {', '.join(members)}"
-                )
-
-        # Add full graph if manageable
-        node_count = len(self.memory.get_nodes())  # this can be pre-computed
+        # Add graph summary if manageable
+        node_count = len(self.memory.get_nodes())
         if node_count < 50:
-            context_parts.append("\nFull graph summary:")
-            context_parts.append(f"--Total nodes: {node_count}")
-            context_parts.append(f"--Total edges: {len(self.memory.get_edges())}")
-
-        # Also add fuzzy search results
-        # TODO: [PRIORITY:High] Verify whether we can implement fuzzy retrieval on the graph level.
-        if keywords:
-            fuzzy_results = self.fuzzy_search(keywords)
-            if fuzzy_results:
-                context_parts.append("\nFuzzy search results.")
-                context_parts.extend(fuzzy_results)
+            graph_summary = f"\nGraph summary: {node_count} nodes, {len(self.memory.get_edges())} edges"
+            context_parts.append(graph_summary)
 
         return (
             "\n".join(context_parts) if context_parts else "No relevant context found."
@@ -483,34 +536,25 @@ class CogitoAgent:
         self, primitives: dict[str, Any], context: str
     ) -> ConsolidationResult:
         """Consolidate new information with existing knowledge"""
+        # 1. Check for direct contradictions
+        conflicts = self._detect_conflicts(primitives)
+
         try:
             # Analyze and consolidate
             result = self._llm_structured(
-                prompt=Prompts.consolidate(
+                query=Prompts.consolidate(
                     context=context,
                     new_primitives=json.dumps(primitives),
                     query=context[:500],  # Context as a query
                 )
             )
 
-            # Parse the result
-            new_info = []
-            for item in result.get("new_information", []):
-                new_info.append(
-                    Primitive(
-                        primitive_type=item.get("type", "entity"),
-                        data=item.get("data", {}),
-                        confidence=item.get("confidence", 0.5),
-                        source="llm_consolidation",
-                    )
-                )
-
             return ConsolidationResult(
                 current_knowledge=result.get("knowledge_summary", ""),
-                new_information=new_info,
+                new_information=result.get("new_information", []),
                 gaps=result.get("gaps", []),
                 updates=result.get("updates", []),
-                confidence_adjustments=result.get("confidence_adjustments", []),
+                conflicts=conflicts,
             )
 
         except Exception as e:
@@ -520,7 +564,7 @@ class CogitoAgent:
                 new_information=[],
                 gaps=[],
                 updates=[],
-                confidence_adjustments=[],
+                conflicts=conflicts,
             )
 
     # Step 4: REASON
@@ -529,19 +573,17 @@ class CogitoAgent:
         query: str,
         context: str,
         consolidated: ConsolidationResult,
-        tool_results: list[dict[str, Any]] | None = None,
     ) -> ReasoningResult:
         """Reason using the consolidated graph."""
         try:
             # Fill gaps using tools if needed
-            tool_output = None
+            tool_results = None
             if consolidated.gaps and self.tools:
-                tool_output = self._call_tools(consolidated.gaps)
-                tool_results = tool_output
+                tool_results = self._call_tools(consolidated.gaps)
 
             # Generate reasoning
             reasoning_text = self._llm_call(
-                prompt=Prompts.reason(
+                query=Prompts.reason(
                     query=query,
                     context=context,
                     gaps=json.dumps(consolidated.gaps),
@@ -573,29 +615,25 @@ class CogitoAgent:
             )
 
     # Step 5: UPDATE
-    def _update_memory(self, consolidated: ConsolidationResult):
+    def _update_memory(self, consolidated: ConsolidationResult) -> None:
         """Update the memory graph with new information"""
         for update in consolidated.updates:
-            update_type = update.get("type")
-            data = update.get("data", {})
-            confidence = data.get("confidence", 0.5)
+            confidence = update.get("confidence", 0.5)
 
             # Skip low confidence updates
             if confidence < self.confidence_threshold:
-                logger.debug(
-                    f"[CogitoAgent] Skipping update with low confidence: {confidence}"
-                )
+                self._log_debug(f"Skipping low-confidence update: {confidence}")
                 continue
 
             try:
-                if update_type == "add" or update_type == "modify":
-                    self.apply_update(data)
-                elif update_type == "conflict":
-                    self._handle_conflict(data)
+                self._apply_update(update.get("data", {}), confidence)
 
             except Exception as e:
                 logger.error(f"[CogitoAgent] Failed to appy update: {e}")
-        pass
+
+        # Store conflicts for review
+        for conflict in consolidated.conflicts:
+            self._store_conflict(conflict)
 
     # Step 6: RESPOND
     def _respond(self, reasoning_result: ReasoningResult, context: str) -> str:
@@ -617,8 +655,7 @@ class CogitoAgent:
             return reasoning_result.solution
 
     # ReAct Loop (Fallback)
-    # TODO: Use the memory agent project ccode
-    def _react_loop(self, query: str, comprehended: dict[str, Any]) -> str:
+    def _react_loop(self, query: str) -> str:
         """Simple ReAct loop for straightforward tasks."""
         # Simple ReAct: reason → act → observe → respond
         try:
@@ -646,25 +683,36 @@ class CogitoAgent:
             )
 
     # LLM Helpers
-    def _llm_call(self, prompt: str) -> str:
+    def _llm_react(self, query: str) -> str:
+        """ReAct LLM call"""
+        # Resume here!
+        # TODO: Finish the proper ReAct pattern implementation (_react_loop() needs adjustments)
+        return ""
+
+    def _llm_call(self, query: str) -> str:
         """Call the LLM with a prompt."""
         messages = [
             {
                 "role": "system",
                 "content": "You are the Cogito Agent, a reasoning agent with symbolic memory.",
             },
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": query},
         ]
-        return self.llm.chat(messages)
 
-    def _llm_structured(self, prompt: str) -> dict[str, Any]:
+        response = self.llm.chat(messages=messages)
+        self.llm_calls += 1
+
+        return response
+
+    def _llm_structured(self, query: str) -> dict[str, Any]:
         """Call the LLM and parse structured output."""
+        # TODO: [PERSPECTIVE] Prompt can be improved and retrieved from a separate prompts script/module.
         messages = [
             {
                 "role": "system",
                 "content": "You are the Cogito Agent, a reasoning agent with symbolic memory. Return valid JSON.",
             },
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": query},
         ]
         response = self.llm.chat(messages)
 
@@ -680,16 +728,145 @@ class CogitoAgent:
         except json.JSONDecodeError:
             return {"raw": response}
 
-    def _parse_primitives(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Parse extracted primitives"""
+    def extract_primitives(self, query: str) -> dict[str, Any]:
+        """Extract graph primitives from query using structured output."""
+        prompt = Prompts.extract_primitives(query=query)
+        response = self._llm_structured(query=prompt)
         return {
-            "entities": data.get("entities", []),
-            "relations": data.get("relations", []),
-            "attributes": data.get("attributes", []),
-            "intent": data.get("intent", "ask"),
+            "entities": response.get("entities", []),
+            "relations": response.get("relations", []),
+            "attributes": response.get("attributes", []),
+            "intent": response.get("intent", "ask"),
         }
 
-    # TODO: This can be improved?
+    # TODO: [PERSPECTIVE] We can rely on the LLM to classify the intent
+    # (maybe a separate LLM session to avoid bias)
+    def _detect_complexity(self, query: str, primitives: dict[str, Any]) -> bool:
+        """Detect if query requires full Cogito path."""
+        # Check for explicit complexity markers
+        complex_indicators = [
+            "relationship",
+            "connected",
+            "tell me about",
+            "describe",
+            "explain",
+            "between",
+            "and also",
+            "who is",
+            "what is the relationship",
+            "how are",
+        ]
+
+        if any(ind in query.lower() for ind in complex_indicators):
+            return True
+
+        if len(primitives.get("entities", [])) > 2:
+            return True
+        if len(primitives.get("relations", [])) > 0:
+            return True
+
+        # Check intent
+        if primitives.get("intent") in ["task", "clarify"]:
+            return True
+
+        return False
+
+    def _detect_conflicts(self, primitives: dict[str, Any]) -> list[dict[str, Any]]:
+        """Detect contradictions between new and existing knowledge."""
+        conflicts = []
+
+        for entity in primitives.get("entities", []):
+            entity_id = entity.get("id")
+            if not entity_id:
+                continue
+
+            if not self.memory.has_node(entity_id):
+                continue
+
+            existing = self.memory.get_node(entity_id)
+            existing_metadata = existing.get_metadata()
+            new_metadata = entity.get("metadata", {})
+
+            # Check for conflicting attributes
+            for key, new_value in new_metadata.items():
+                if key in existing_metadata and existing_metadata[key] != new_value:
+                    conflicts.append(
+                        {
+                            "entity": entity_id,
+                            "attribute": key,
+                            "existing": existing_metadata[key],
+                            "new": new_value,
+                        }
+                    )
+
+        return conflicts
+
+    def _apply_update(self, data: dict[str, Any], confidence: float) -> None:
+        """Apply a single update to the graph."""
+        primitive_type = data.get("type")
+
+        if primitive_type == "entity":
+            entity_id = data.get("id", "")
+            label = data.get("label", entity_id)
+            metadata = data.get("metadata", {})
+            metadata["confidence"] = confidence
+            metadata["source"] = "cogito_agent"
+            metadata["updated_at"] = datetime.now().isoformat()
+
+            if self.memory.has_node(entity_id):
+                node = self.memory.get_node(entity_id)
+                for key, value in metadata.items():
+                    node.update_metadata(key, value)
+                if label != node.get_label():
+                    node.set_label(label)
+            else:
+                node = Node(entity_id, label, metadata)
+                self.memory.add_node(node)
+
+        elif primitive_type == "relation":
+            source = data.get("source", "")
+            target = data.get("target", "")
+            label = data.get("label", "")
+            direction = data.get("direction", "asymmetric")
+            weight = data.get("weight", 0.8)
+            metadata = data.get("metadata", {})
+            metadata["confidence"] = confidence
+
+            edge_id = f"{source}_{target}"
+
+            if direction == "symmetric":
+                self.memory.add_group_edge(
+                    id=edge_id,
+                    label=label,
+                    node_ids={source, target},
+                    weight=weight,
+                    metadata=metadata,
+                )
+            else:
+                edge = Edge(
+                    id=edge_id,
+                    label=label,
+                    type=EdgeType.ASYMMETRIC,
+                    connections=(source, target),
+                    weight=weight,
+                    metadata=metadata,
+                )
+                self.memory.add_edge(edge)
+
+    def _store_conflict(self, conflict: dict[str, Any]) -> None:
+        """Store a conflict in the graph for later resolution."""
+        conflict_node = Node(
+            id=f"conflict_{datetime.now().timestamp()}",
+            label="Conflict",
+            metadata={
+                "type": "conflict",
+                "data": conflict,
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+        self.memory.add_node(conflict_node)
+
+    # TODO: [PERSPECTIVE] This can be improved?
     def _extract_keywords(self, entities: list[dict[str, Any]]) -> list[str]:
         """Extract keywords from entities for fuzzy search."""
         keywords = []
@@ -699,7 +876,7 @@ class CogitoAgent:
 
         return [k for k in keywords if k and len(k) > 2]
 
-    # TODO: We can use RapidFuzz for the fuzzy search
+    # TODO: [TASK] We can use RapidFuzz for the fuzzy search
     def fuzzy_search(self, keywords: list[str]) -> list[str]:
         """Perform fuzzy search for nodes matching keywords."""
         results = []
@@ -719,10 +896,10 @@ class CogitoAgent:
         results = []
         for gap in gaps:
             # Simple tool routing based on gap description (can be enhanced)
-            for tool_name, tool_func in self.tools.items():
+            for tool_name, tool in self.tools.items():
                 if tool_name in gap.lower():
                     try:
-                        result = tool_func(gap)
+                        result = tool.execute(gap=gap)
                         results.append(
                             {
                                 "tool": tool_name,
@@ -745,7 +922,7 @@ class CogitoAgent:
 
         return results
 
-    # TODO: Use structured output for extraction or special markers
+    # TODO: [TASK] Use structured output for extraction or special markers
     def _extract_solution(self, reasoning_text: str) -> str:
         """Extract solution from reasoning text."""
         if "solutin:" in reasoning_text:
@@ -753,93 +930,23 @@ class CogitoAgent:
             return parts[-1].strip() if len(parts) > 1 else reasoning_text
         return reasoning_text
 
+    # TODO: [PERSPECTIVE] This also can be replaced with LLM-as-a-judge
     def _estimate_confidence(
-        self, reasoning_text: str, consolidated: ConsolidationResult
+        self, text: str, consolidated: ConsolidationResult
     ) -> float:
-        """Estrimate confidence in the reasoning"""
-        # Simple heuristic to check for uncertainty markers (for now)
-        uncertainty_markers = [
-            "I am not sure",
-            "I think",
-            "maybe",
-            "possibility",
-            "could be",
-        ]
-        uncertainty_count = sum(
-            1 for m in uncertainty_markers if m in reasoning_text.lower()
-        )
+        """Estimate confidence in the reasoning."""
+        uncertainty_markers = ["not sure", "I think", "maybe", "possibly", "could be"]
+        uncertainty_count = sum(1 for m in uncertainty_markers if m in text.lower())
 
-        # Higher confidence with fewer uncertainty markers
-        base_confidence = 0.9
-        confidence = max(0.3, base_confidence - (uncertainty_count * 0.1))
+        confidence = max(0.3, 0.9 - (uncertainty_count * 0.1))
 
-        # Adjust based on consolidated confidence
         if consolidated.new_information:
-            avg_confidence = sum(
-                i.confidence for i in consolidated.new_information
+            avg = sum(
+                item.get("confidence", 0.5) for item in consolidated.new_information
             ) / len(consolidated.new_information)
-            confidence = (confidence + avg_confidence) / 2
+            confidence = (confidence + avg) / 2
 
         return min(1.0, confidence)
-
-    def apply_update(self, data: dict[str, Any]):
-        """Apply a single update to the graph"""
-        primitive_type = data.get("type")
-
-        if primitive_type == "entity":
-            # Add or update node
-            entity_id = data.get("id", "")
-            label = data.get("label", entity_id)
-            metadata = data.get("metadata", {})
-
-            if self.memory.has_node(node_id=entity_id):
-                # Update existing node
-                node = self.memory.get_node(node_id=entity_id)
-                # Update metadata
-                node.update_metadata("updated_at", datetime.now().isoformat())
-                for key, value in metadata.items:
-                    node.update_metadata(key, value)
-                node.set_label(label=label)
-
-            else:
-                # Create new node
-                node = Node(id=entity_id, label=label, metadata=metadata)
-                self.memory.add_node(node=node)
-
-        elif primitive_type == "relation":
-            # Add edge
-            source = data.get("source", "")
-            target = data.get("target", "")
-            label = data.get("label", "")
-            direction = data.get("direction", "asymmetric")
-            weight = data.get("weight", 0.8)
-            metadata = data.get("metadata", {})
-
-            if direction == "symmetric":
-                # Use group edge for symmetric (will group edge work for bidirectional relations)
-                self.memory.add_group_edge(
-                    id=f"{source}_{target}",
-                    label=label,
-                    node_ids={source, target},
-                    weight=weight,
-                    metadata=metadata,
-                )
-            else:
-                # Use symmetric edge with exactly 2 nodes
-                from memory_graph import EdgeType
-
-                conn = AsymmetricConnections((source, target))
-                edge = Edge(
-                    id=f"{source}_{target}",
-                    label=label,
-                    type=EdgeType.ASYMMETRIC,
-                    connections=conn,
-                    weight=weight,
-                    metadata=metadata,
-                )
-                self.memory.add_edge(edge)
-
-            logger.info(f"  Updated relation: {source} → {target} ({label})")
 
     def _handle_conflict(self, data: dict[str, Any]):
         """Handle a conflict in the graph."""
@@ -865,14 +972,28 @@ class CogitoAgent:
         self.memory.add_node(conflict_node)
 
     # Utilities
-    def save_memory(self, filepath: str):
-        """Save the memory graph to a file."""
+    def _log_init(self) -> None:
+        """Log initialization details."""
+        logger.info("Cogito Agent initialized")
+        logger.info(
+            f"  Memory: {len(self.memory.get_nodes())} nodes, {len(self.memory.get_edges())} edges"
+        )
+        logger.info(f"  Tools: {list(self.tools) if self.tools else 'None'}")
+        logger.info(f"  Confidence threshold: {self.confidence_threshold}")
+
+    def _log_debug(self, message: str) -> None:
+        """Log debug message if enabled."""
+        if self.debug:
+            logger.debug(f"[DEBUG] {message}")
+
+    def save_memory(self, filepath: str) -> None:
+        """Save memory graph to file."""
         with open(filepath, "w") as f:
             json.dump(self.memory.to_json(), f, indent=2)
         logger.info(f"Memory saved to {filepath}")
 
-    def load_memory(self, filepath: str):
-        """Load a memory graph from a file."""
+    def load_memory(self, filepath: str) -> None:
+        """Load memory graph from file."""
         with open(filepath, "r") as f:
             data = json.load(f)
             self.memory = MemoryGraph.from_json(data)
