@@ -10,21 +10,21 @@ import json
 import logging
 
 from dataclasses import dataclass, field
-
 from typing import Any
 
 from .base import BaseAgent, BaseAgentState
 from ..llm import BaseLLM
 from ..tools import Tool
 
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
 MARKER_THOUGHT = "THOUGHT"
 MARKER_TOOL = "TOOL"
 MARKER_TOOL_INPUT = "TOOL-INPUT"
 MARKER_TOOL_OUTPUT = "TOOL-OUTPUT"
 MARKER_FINAL_ANSWER = "FINAL-ANSWER"
-
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,7 +67,10 @@ class ReactAgent(BaseAgent):
         config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(llm, tools, config)
+        self._CLSNAME = self.__class__.__name__
+
         self.max_steps = self.config.get("max_steps", 5)
+        self.logger = logging.getLogger(name=f"[{self._CLSNAME}]")
 
     def _initialize_state(self) -> ReactState:
         """Create a ReactState instance"""
@@ -125,13 +128,13 @@ class ReactAgent(BaseAgent):
         5. Provide direct, truthful answers without tool references when no tools exist
 
         ## EXAMPLE WITH TOOLS
-        Question: What is the weather in Paris?
-        <{MARKER_THOUGHT}> I need to get the weather for Paris</{MARKER_THOUGHT}>
+        Question: What is the weather in Tunis?
+        <{MARKER_THOUGHT}> I need to get the weather for Tunis</{MARKER_THOUGHT}>
         <{MARKER_TOOL}>get_weather</{MARKER_TOOL}>
-        <{MARKER_TOOL_INPUT}>{{"city": "Paris"}}</{MARKER_TOOL_INPUT}>
-        <{MARKER_TOOL_OUTPUT}>: Sunny, 25°C</{MARKER_TOOL_OUTPUT}>
+        <{MARKER_TOOL_INPUT}>{{"city": "Tunis"}}</{MARKER_TOOL_INPUT}>
+        <{MARKER_TOOL_OUTPUT}>: Sunny, 35°C</{MARKER_TOOL_OUTPUT}>
         <{MARKER_THOUGHT}> I now have the weather information</{MARKER_THOUGHT}>
-        <{MARKER_FINAL_ANSWER}> The weather in Paris is sunny with a temperature of 25°C.</{MARKER_FINAL_ANSWER}>
+        <{MARKER_FINAL_ANSWER}> The weather in Tunis is sunny with a temperature of 25°C.</{MARKER_FINAL_ANSWER}>
 
         ## EXAMPLE WITHOUT TOOLS
         Question: Who wrote Romeo and Juliet?
@@ -156,21 +159,36 @@ class ReactAgent(BaseAgent):
         Returns:
             Final assistant answer.
         """
-        self._log_debug(f"Processing query: {query[:100]}")
+        self._log_debug(
+            f"[{self._CLSNAME}:process_query] Processing query: {query[:100]}"
+        )
 
         self.state = self._initialize_state()
         self.state.add_message(role="system", content=self._get_system_prompt())
         self.state.add_message(role="user", content=query)
 
-        for _ in range(self.max_steps):
+        self.logger.info(
+            f"[{self._CLSNAME}:process_query] Starting ReAct loop (max_steps={self.max_steps})"
+        )
+
+        for step in range(self.max_steps):
             self.state.increment_turn()
+            self.logger.info(
+                f"[{self._CLSNAME}:process_query] Turn {step + 1}/{self.max_steps}"
+            )
             response = self._reason()
             final_answer = self._route_response(response=response)
 
             if final_answer is not None:
+                self.logger.info(
+                    f"[{self._CLSNAME}:process_query] [X] Final answer generated"
+                )
                 return final_answer
 
-        raise RuntimeError(f"[ReActAgent] Agent exceeded max_steps={self.max_steps}.")
+        self.logger.error(f"[{self._CLSNAME}:process_query] [!] Max steps exceeded")
+        raise RuntimeError(
+            f"[{self._CLSNAME}:_process_query] Agent exceeded max_steps={self.max_steps}."
+        )
 
     def _reason(self) -> str:
         """
@@ -188,10 +206,12 @@ class ReactAgent(BaseAgent):
         response = self._llm_call(messages=messages)
 
         if self.debug:
-            print(
-                f"[ReActAgent][DEBUG] LLM Prompt:\n{json.dumps(self.state.messages, indent=2)}\n---"
+            self.logger.debug(
+                f"[{self._CLSNAME}:_reason] LLM Prompt:\n{json.dumps(self.state.messages, indent=2)}\n---"
             )
-            print(f"[ReActAgent][DEBUG] LLM Response:\n{response}\n---")
+            self.logger.debug(
+                f"[{self._CLSNAME}:_reason] LLM Response:\n{response}\n---"
+            )
 
         self.state.add_message(role="assistant", content=response)
         return response
@@ -209,8 +229,12 @@ class ReactAgent(BaseAgent):
             None if the loop should continue.
         """
         # 1. No tools trajectory:
+        self.logger.info(
+            f"[{self._CLSNAME}:_route_response] raw response:\n{response}\n---"
+        )
+
         if not self.tools:
-            if "<{MARKER_FINAL_ANSWER}>" in response:
+            if f"<{MARKER_FINAL_ANSWER}>" in response:
                 answer = self._extract_block(
                     text=response,
                     start=f"<{MARKER_FINAL_ANSWER}>",
@@ -263,6 +287,9 @@ class ReactAgent(BaseAgent):
             end=f"</{MARKER_FINAL_ANSWER}>",
         )
         self.state.add_message(role="assistant", content=answer)
+        self.logger.info(
+            f"[{self._CLSNAME}:_handle_final_answer] Final answer: {answer[:100]}"
+        )
         return answer
 
     def _handle_tool_path(
@@ -291,6 +318,10 @@ class ReactAgent(BaseAgent):
 
             thought, tool_name, tool_input = parsed
 
+            self.logger.info(
+                f"[{self._CLSNAME}:_handle_tool_path] Tool: {tool_name} | kwargs: {tool_input}"
+            )
+
             # Record intent
             self.state.add_thought(thought)
             self.state.add_tool_call(tool_name, tool_input)
@@ -299,6 +330,9 @@ class ReactAgent(BaseAgent):
                 tool_output = self._execute_tool(tool_name, tool_input)
                 output_message = (
                     f"<{MARKER_TOOL_OUTPUT}>{tool_output}</{MARKER_TOOL_OUTPUT}>"
+                )
+                self.logger.debug(
+                    f"[{self._CLSNAME}:_handle_tool_path] Tool output:\n{tool_output}\n---"
                 )
             except Exception as e:
                 # Do we add the tool output marker here?
@@ -360,8 +394,8 @@ class ReactAgent(BaseAgent):
             tool_input_raw = text.split(f"<{MARKER_TOOL_INPUT}>", 1)[1].strip()
 
             if self.debug:
-                print(
-                    f"[ReActAgent][DEBUG] Raw Action Input snippet: {repr(tool_input_raw[:100])}"
+                self.logger.debug(
+                    f"[{self._CLSNAME}:_parse_action] Raw tool input snippet:\n{tool_input_raw}\n---"
                 )
 
             # ROBUST JSON EXTRACTION: Find first '{' and LAST '}' to handle nested objects
@@ -388,10 +422,10 @@ class ReactAgent(BaseAgent):
 
         except (IndexError, json.JSONDecodeError, AttributeError) as e:
             if self.debug:
-                print(
-                    f"[ReActAgent][DEBUG] Failed to parse ReAct response: {text}\n---"
+                self.logger.debug(
+                    f"[{self._CLSNAME}:_parse_action] Failed to parse ReAct response:\n{text}\n---"
                 )
-                print(f"[ReActAgent][DEBUG] Error: {e}\n---")
+                self.logger.debug(f"[{self._CLSNAME}:_parse_action] Error:\n{e}\n---")
 
             return None
 
