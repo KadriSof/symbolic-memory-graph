@@ -76,7 +76,7 @@ jobs:
           cd python
           uv venv --python ${{ matrix.python-version }}
           source .venv/bin/activate
-          uv pip install -e .
+          uv pip install -e ".[llm,local,dev]"
 
       - name: Build C++ bindings
         run: |
