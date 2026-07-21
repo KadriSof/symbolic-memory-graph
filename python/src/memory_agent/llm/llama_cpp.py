@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Any
 
-from llama_cpp import Llama
+from llama_cpp import Llama  # type: ignore
 
 from .base import BaseLLM, GenerationConfig, Messages
 
