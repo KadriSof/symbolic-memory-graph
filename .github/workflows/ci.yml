@@ -123,7 +123,7 @@ jobs:
 
       - name: Check C++ formatting
         run: |
-          find . -name "*.cpp" -o -name "*.hpp" | grep -v "build\|pybind11\|third_party" | xargs clang-format --dry-run --Werror
+          find . -path "./python/.venv" -prune -o -path "./build" -prune -o -path "./pybind11" -prune -o -path "./third_party" -prune -o -name "*.cpp" -o -name "*.hpp" | xargs clang-format --dry-run --Werror
 
       - name: Check Python formatting
         run: |
