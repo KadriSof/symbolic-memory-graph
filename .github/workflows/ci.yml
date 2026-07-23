@@ -120,7 +120,6 @@ jobs:
           uv venv
           source .venv/bin/activate
           uv pip install -e ".[llm,local,dev]"
-          uv pip install memory_graph_core
 
       - name: Check C++ formatting
         run: |
