@@ -44,3 +44,4 @@ reportMissingImports = true
 reportMissingTypeStubs = false
 reportImportCycles = false
 reportMissingModuleSource = false
+stubPath = "src"

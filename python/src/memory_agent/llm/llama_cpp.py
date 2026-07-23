@@ -135,9 +135,11 @@ class LlamaCppLLM(BaseLLM):
             )
 
             # Extract text from response
-            content = (
-                response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            )
+            if isinstance(response, dict):
+                content = response.get("choices", [{}])[0].get("message", {}).get("content", "")  # type: ignore
+            else:
+                content = str(response)
+
             if content is None:
                 content = ""
 
@@ -213,9 +215,11 @@ class LlamaCppLLM(BaseLLM):
                 **kwargs,
             )
 
-            content = (
-                response.get("choices", [{}])[0].get("message", {}).get("content", "")  # type: ignore
-            )
+            if isinstance(response, dict):
+                content = response.get("choices", [{}])[0].get("message", {}).get("content", "")  # type: ignore
+            else:
+                content = str(response)
+
             if content is None:
                 content = ""
 
