@@ -77,7 +77,6 @@ jobs:
           uv venv --python ${{ matrix.python-version }}
           source .venv/bin/activate
           uv pip install -e ".[llm,local,dev]"
-
       - name: Build C++ bindings
         run: |
           mkdir -p build
@@ -120,7 +119,7 @@ jobs:
           cd python
           uv venv
           source .venv/bin/activate
-          uv pip install black pyright
+          uv pip install -e ".[llm,local,dev]"
 
       - name: Check C++ formatting
         run: |
