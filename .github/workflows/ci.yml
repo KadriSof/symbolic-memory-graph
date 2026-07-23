@@ -90,7 +90,7 @@ jobs:
         run: |
           cd python
           source .venv/bin/activate
-          python -c "from memory_graph import MemoryGraph, Node, Edge; print('✅ Import works!')"
+          python -c "from memory_graph import MemoryGraph, Node, Edge; print('Import works!')"
 
   # Linting & Formatting
   lint:
@@ -120,6 +120,7 @@ jobs:
           uv venv
           source .venv/bin/activate
           uv pip install -e ".[llm,local,dev]"
+          uv pip install memory_graph_core
 
       - name: Check C++ formatting
         run: |

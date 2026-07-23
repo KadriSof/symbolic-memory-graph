@@ -214,7 +214,7 @@ class LlamaCppLLM(BaseLLM):
             )
 
             content = (
-                response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                response.get("choices", [{}])[0].get("message", {}).get("content", "")  # type: ignore
             )
             if content is None:
                 content = ""
