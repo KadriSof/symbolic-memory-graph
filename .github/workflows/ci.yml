@@ -76,8 +76,7 @@ jobs:
           cd python
           uv venv --python ${{ matrix.python-version }}
           source .venv/bin/activate
-          uv pip install -e .
-
+          uv pip install -e ".[llm,local,dev]"
       - name: Build C++ bindings
         run: |
           mkdir -p build
@@ -91,7 +90,7 @@ jobs:
         run: |
           cd python
           source .venv/bin/activate
-          python -c "from memory_graph import MemoryGraph, Node, Edge; print('✅ Import works!')"
+          python -c "from memory_graph import MemoryGraph, Node, Edge; print('Import works!')"
 
   # Linting & Formatting
   lint:
@@ -105,7 +104,9 @@ jobs:
           submodules: recursive
 
       - name: Install clang-format
-        run: sudo apt-get install -y clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -120,11 +121,17 @@ jobs:
           cd python
           uv venv
           source .venv/bin/activate
-          uv pip install black pyright
+          uv pip install -e ".[llm,local,dev]"
 
       - name: Check C++ formatting
         run: |
-          find . -name "*.cpp" -o -name "*.hpp" | grep -v "build\|pybind11\|third_party" | xargs clang-format --dry-run --Werror
+          find . \
+            -path "./python/.venv" -prune -o \
+            -path "./build" -prune -o \
+            -path "./bindings/pybind11" -prune -o \
+            -path "./third_party" -prune -o \
+            -type f \( -name "*.cpp" -o -name "*.hpp" \) \
+            -print | xargs clang-format --dry-run --Werror
 
       - name: Check Python formatting
         run: |
@@ -136,4 +143,5 @@ jobs:
         run: |
           cd python
           source .venv/bin/activate
-          pyright src/
+          export PYRIGHT_PYTHON=1
+          pyright --verbose src/

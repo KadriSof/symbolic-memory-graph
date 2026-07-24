@@ -5,7 +5,17 @@ description = "Symbolic memory graph for LLM agents"
 readme = "README.md"
 requires-python = ">=3.8,<3.14"
 authors = [{ name = "Mohamed Sofiene KADRI", email = "ms.kadri.dev@gmail.com" }]
-dependencies = []
+dependencies = [
+  "dotenv>=0.9.9",
+  "groq>=0.33.0",
+  "llama-cpp-python>=0.3.23",
+  "tenacity>=9.0.0",
+]
+
+[project.optional-dependencies]
+llm = ["groq>=0.5.0", "python-dotenv>=1.0.0", "tenacity>=8.0.0"]
+local = ["llama-cpp-python>=0.2.0"]
+dev = ["pytest>=8.0.0", "black>=24.0.0", "pyright>=1.1.0"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -32,5 +42,7 @@ pythonVersion = "3.12"
 typeCheckingMode = "basic"
 reportMissingImports = true
 reportMissingTypeStubs = false
-reportimportCycles = false
+reportImportCycles = false
 reportMissingModuleSource = false
+stubPath = "src"
+extraPaths = ["src", "src/memory_graph"]
