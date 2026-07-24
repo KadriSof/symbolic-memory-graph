@@ -45,3 +45,4 @@ reportMissingTypeStubs = false
 reportImportCycles = false
 reportMissingModuleSource = false
 stubPath = "src"
+extraPaths = ["src", "src/memory_graph"]
