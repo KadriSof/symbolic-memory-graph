@@ -255,7 +255,7 @@ class GraphRepresentation:
 
         # Get nodes with labels
         node_labels = {}
-        for node in graph.get_nodes()[:max_nodes]:
+        for node in graph.get_nodes():
             node_labels[node.get_id()] = node.get_label()
 
         # Build sentences from edges
@@ -273,8 +273,8 @@ class GraphRepresentation:
 
             else:
                 source, target = conn
-                s1 = node_labels.get(source, target)
-                s2 = node_labels.get(target, source)
+                s1 = node_labels.get(source, source)
+                s2 = node_labels.get(target, target)
                 sentences.append(f"{s1} {label} {s2}.")
 
         return "\n".join(sentences) if sentences else "The graph is empty."
