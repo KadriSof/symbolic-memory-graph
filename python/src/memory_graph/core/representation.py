@@ -146,14 +146,14 @@ class GraphRepresentation:
             (geralt) -[fellow_witchers] -> (vesemir)
             (geralt) -[loves]-> (yennefer)
         """
-        triples = GraphRepresentation._to_triples_list(graph)
-        if len(triples) > max_edges:
-            triples = triples[:max_edges]
-            lines = [f"[Note: Showing {max_edges} of {len(triples)} relations"]
+        triples_ = GraphRepresentation._to_triples_list(graph)
+        if len(triples_) > max_edges:
+            triples = triples_[:max_edges]
+            lines = [f"[Note: Showing {max_edges} of {len(triples)} relations]"]
         else:
             lines = []
 
-        for t in triples:
+        for t in triples_:
             lines.append(f"({t['subject']}) -[{t['predicate']}]-> ({t['object']})")
 
         return "\n".join(lines)
