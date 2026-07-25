@@ -49,7 +49,7 @@ class GraphRepresentation:
         """
         if format == "linearized":
             return GraphRepresentation.to_linearized_text(
-                graph, max_nodes, include_metadata
+                graph, max_nodes, max_edges, include_metadata
             )
         elif format == "triples":
             return GraphRepresentation.to_triples_text(graph, max_edges)
