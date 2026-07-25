@@ -192,7 +192,7 @@ class GraphRepresentation:
         """Convert graph to pretty JSON string."""
         import json
 
-        data = GraphRepresentation.to_json_string(graph, include_metadata)
+        data = GraphRepresentation.to_json_dict(graph, include_metadata)
         return json.dumps(data, indent=2)
 
     @staticmethod
