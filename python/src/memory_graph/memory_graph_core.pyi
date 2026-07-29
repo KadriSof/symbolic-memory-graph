@@ -1,7 +1,7 @@
 # Type stubs for the compiled C++ module memory_graph_core
 # Generated automatically - do not edit manually
 
-from typing import Any, Dict, List, Set, Tuple, Union
+from typing import Any, Dict, List, Set, Tuple, Union, Callable
 
 class EdgeType:
     SYMMETRIC: int
@@ -81,3 +81,111 @@ class MemoryGraph:
     def set_metadata(self, metadata: Dict[str, Any]) -> None: ...
     def update_metadata(self, key: str, value: Any) -> None: ...
     def __len__(self) -> int: ...
+
+# Traversal Functions
+def bfs(graph: MemoryGraph, start: str, max_depth: int = -1) -> List[str]:
+    """Breadth-First Search traversal starting from a node."""
+    ...
+
+def dfs(graph: MemoryGraph, start: str, max_depth: int = -1) -> List[str]:
+    """Depth-First Search traversal starting from a node."""
+    ...
+
+def shortest_path(graph: MemoryGraph, from_node: str, to_node: str) -> List[str]:
+    """Find the shortest path between two nodes."""
+    ...
+
+def find_all_paths(
+    graph: MemoryGraph, from_node: str, to_node: str, max_depth: int = -1
+) -> List[List[str]]:
+    """Find all paths between two nodes."""
+    ...
+
+def has_cycle(graph: MemoryGraph) -> bool:
+    """Check if the graph contains a cycle."""
+    ...
+
+def topological_sort(graph: MemoryGraph) -> List[str]:
+    """Perform topological sort on a directed acyclic graph."""
+    ...
+
+def is_connected(graph: MemoryGraph, start: str) -> bool:
+    """Check if graph is connected from a given start node."""
+    ...
+
+def subgraph(
+    graph: MemoryGraph, center: str, radius: int, include_edges: bool = True
+) -> MemoryGraph:
+    """Extract a subgraph centered at a node within a radius."""
+    ...
+
+def subgraph_by_predicate(
+    graph: MemoryGraph,
+    predicate: Callable[[Node], bool],
+    include_neighbors: bool = False,
+) -> MemoryGraph:
+    """Extract a subgraph containing all nodes matching a predicate."""
+    ...
+
+def find_nodes_by_label(graph: MemoryGraph, label: str) -> List[str]:
+    """Find nodes by label."""
+    ...
+
+def find_nodes_by_metadata(graph: MemoryGraph, key: str, value: Any) -> List[str]:
+    """Find nodes by metadata key-value pair."""
+    ...
+
+def get_context_window(
+    graph: MemoryGraph, center: str, max_tokens: int = 4096, min_relevance: float = 0.5
+) -> Dict[str, Any]:
+    """Get a context window for an LLM."""
+    ...
+
+# Serialization Functions
+class CompressionType:
+    NONE: int
+    ZLIB: int
+    LZ4: int
+
+class SerializationOptions:
+    include_metadata: bool
+    include_edges: bool
+    compression: int
+    version: int
+    def __init__(self) -> None: ...
+
+def to_binary(graph: MemoryGraph, options: SerializationOptions = ...) -> bytes:
+    """Serialize a MemoryGraph to binary format."""
+    ...
+
+def from_binary(data: bytes) -> MemoryGraph:
+    """Deserialize a MemoryGraph from binary format."""
+    ...
+
+def compute_delta(before: MemoryGraph, after: MemoryGraph) -> Dict[str, Any]:
+    """Compute the difference between two graphs."""
+    ...
+
+def apply_delta(graph: MemoryGraph, delta: Dict[str, Any]) -> None:
+    """Apply a delta to a graph."""
+    ...
+
+def apply_delta_binary(graph: MemoryGraph, delta_data: bytes) -> None:
+    """Apply a delta from binary format."""
+    ...
+
+def compress(data: bytes, type: int = ...) -> bytes:
+    """Compress binary data."""
+    ...
+
+def decompress(data: bytes) -> bytes:
+    """Decompress binary data."""
+    ...
+
+def get_version(data: bytes) -> int:
+    """Get the serialization version from binary data."""
+    ...
+
+def is_valid_format(data: bytes) -> bool:
+    """Check if binary data is valid for this version."""
+    ...

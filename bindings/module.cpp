@@ -14,6 +14,8 @@ void init_connections_types(py::module_ &m);
 void init_edge(py::module_ &m);
 void init_memory_graph(py::module_ &m);
 void init_exceptions(py::module_ &m);
+void init_traversal(py::module_ &m);
+void init_serialization(py::module_ &m);
 
 PYBIND11_MODULE(memory_graph_core, m) {
 #ifdef VERSION_INFO
@@ -24,6 +26,8 @@ PYBIND11_MODULE(memory_graph_core, m) {
 
   m.doc() = "MemoryGraph - C++ bindings for Python";
 
+  init_serialization(m);
+  init_traversal(m);
   init_exceptions(m);
   init_edge_types(m);
   init_connections_types(m);

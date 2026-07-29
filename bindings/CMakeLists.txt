@@ -16,6 +16,8 @@ set(BINDING_SOURCES
     node_binding.cpp
     edge_binding.cpp
     graph_binding.cpp
+    traversal_binding.cpp
+    serialization_binding.cpp
 )
 
 pybind11_add_module(memory_graph_core ${BINDING_SOURCES})
