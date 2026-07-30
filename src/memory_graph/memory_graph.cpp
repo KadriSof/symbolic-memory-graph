@@ -4,6 +4,8 @@
 #include "memory_graph/node.hpp"
 #include "nlohmann/json.hpp"
 #include <cstddef>
+#include <exception>
+#include <iostream>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -439,30 +441,45 @@ nlohmann::json MemoryGraph::toJson() const {
 MemoryGraph MemoryGraph::fromJson(const nlohmann::json &graphJson) {
   MemoryGraph graph(graphJson.value("metadata", nlohmann::json::object()));
 
-  // Deserialize nodes
-  for (const auto &[nodeId, nodesJson] : graphJson["nodes"].items()) {
-    graph.addNode(Node::fromJson(nodesJson));
+  if (graphJson.contains("nodes") && graphJson["nodes"].is_object()) {
+    for (const auto &[nodeId, nodesJson] : graphJson["nodes"].items()) {
+      try {
+        graph.addNode(Node::fromJson(nodesJson));
+      } catch (const std::exception &e) {
+        // Log error but continue
+        std::cerr << "Failed to deserialize node '" << nodeId
+                  << "': " << e.what() << std::endl;
+      }
+    }
   }
 
-  // Deserialize edges
-  for (const auto &[edgeId, edgeJson] : graphJson["edges"].items()) {
-    Edge edge = Edge::fromJson(edgeJson);
+  // Safely deserialize edges
+  if (graphJson.contains("edges") && graphJson["edges"].is_object()) {
+    for (const auto &[edgeId, edgeJson] : graphJson["edges"].items()) {
+      try {
+        Edge edge = Edge::fromJson(edgeJson);
 
-    // Check if this is a group edge
-    if (edge.isGroupEdge()) {
-      // Extract node IDs from the connections
-      const auto &conn = std::get<SymmetricConnections>(edge.getConnections());
+        // Check if this is a group edge
+        if (edge.isGroupEdge()) {
+          // Extract node IDs from the connections
+          const auto &conn =
+              std::get<SymmetricConnections>(edge.getConnections());
 
-      // Create a set of node IDs from the connection
-      std::unordered_set<std::string> nodeIds;
-      for (const auto &nodeId : conn) {
-        nodeIds.insert(nodeId);
+          // Create a set of node IDs from the connection
+          std::unordered_set<std::string> nodeIds;
+          for (const auto &nodeId : conn) {
+            nodeIds.insert(nodeId);
+          }
+
+          graph.addGroupEdge(edge.getId(), edge.getLabel(), nodeIds,
+                             edge.getWeight(), edge.getMetadata());
+        } else {
+          graph.addEdge(edge);
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "Failed to deserialize edge '" << edgeId
+                  << "': " << e.what() << std::endl;
       }
-
-      graph.addGroupEdge(edge.getId(), edge.getLabel(), nodeIds,
-                         edge.getWeight(), edge.getMetadata());
-    } else {
-      graph.addEdge(edge);
     }
   }
 

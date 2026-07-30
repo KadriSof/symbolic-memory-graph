@@ -48,11 +48,19 @@ nlohmann::json Node::toJson() const {
 }
 
 Node Node::fromJson(const nlohmann::json &nodeJson) {
-  Node node(nodeJson.at("id").get<std::string>(),
-            nodeJson.at("label").get<std::string>(),
-            nodeJson.value("metadata", nlohmann::json::object()));
+  std::string id = nodeJson.at("id").get<std::string>();
+  std::string label = nodeJson.at("label").get<std::string>();
 
-  // Parse and add connections
+  nlohmann::json metadata;
+  if (nodeJson.contains("metadata") && !nodeJson["metadata"].is_null()) {
+    metadata = nodeJson["metadata"];
+  } else {
+    metadata = nlohmann::json::object();
+  }
+
+  Node node(id, label, metadata);
+
+  // Parse connections...
   if (nodeJson.contains("connections") && nodeJson["connections"].is_array()) {
     for (const auto &connectionId : nodeJson["connections"]) {
       node.addConnection(connectionId.get<std::string>());

@@ -70,12 +70,24 @@ nlohmann::json Edge::toJson() const {
 }
 
 Edge Edge::fromJson(const nlohmann::json &edgeJson) {
-  EdgeType type = (edgeJson["type"] == "SYMMETRIC") ? EdgeType::SYMMETRIC
-                                                    : EdgeType::ASYMMETRIC;
-  float weight = edgeJson.value("weight", 1.0f);
-  nlohmann::json metadata =
-      edgeJson.value("metadata", nlohmann::json::object());
+  std::string id = edgeJson.at("id").get<std::string>();
+  std::string label = edgeJson.at("label").get<std::string>();
 
+  std::string typeStr = edgeJson.at("type").get<std::string>();
+  EdgeType type =
+      (typeStr == "SYMMETRIC") ? EdgeType::SYMMETRIC : EdgeType::ASYMMETRIC;
+
+  float weight = edgeJson.value("weight", 1.0f);
+
+  // Fix: Handle null metadata
+  nlohmann::json metadata;
+  if (edgeJson.contains("metadata") && !edgeJson["metadata"].is_null()) {
+    metadata = edgeJson["metadata"];
+  } else {
+    metadata = nlohmann::json::object();
+  }
+
+  // Parse connections...
   Connections connections;
   if (edgeJson["connections"]["type"] == "symmetric") {
     auto nodes =
@@ -88,10 +100,6 @@ Edge Edge::fromJson(const nlohmann::json &edgeJson) {
     connections = AsymmetricConnections(source, target);
   }
 
-  bool isGroupEdge = edgeJson.value("is_group_edge", false);
-
-  return Edge(edgeJson.at("id").get<std::string>(),
-              edgeJson.at("label").get<std::string>(), type, connections,
-              weight, metadata, isGroupEdge);
+  return Edge(id, label, type, connections, weight, metadata);
 }
 } // namespace memory_graph
