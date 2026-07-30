@@ -12,12 +12,12 @@ if str(_current_dir) not in sys.path:
 
 try:
     from memory_graph_core import (
-        MemoryGraph,
-        Node,
+        AsymmetricConnections,
         Edge,
         EdgeType,
+        MemoryGraph,
+        Node,
         SymmetricConnections,
-        AsymmetricConnections,
     )
 except ImportError as e:
     raise ImportError(
@@ -27,11 +27,31 @@ except ImportError as e:
         f"  Original error: {e}"
     ) from e
 
+# [!] Import order must be kept this way to avoid circulair dependency
+from .core.representation import GraphRepresentation  # noqa: E402
+
+# Import core utilities (still in progress..)
+# from .core import (
+# GraphBridge,
+# GraphRepresentation,
+# GraphConstructor,
+# GraphSerializer,
+# )
+
+
 __all__ = [
+    # C++ bindings
     "MemoryGraph",
     "Node",
     "Edge",
     "EdgeType",
     "SymmetricConnections",
     "AsymmetricConnections",
+    # Core utilities
+    # "GraphBridge",
+    "GraphRepresentation",
+    # "GraphConstructor",
+    # "GraphSerializer",
 ]
+
+__version__ = "0.1.0"
