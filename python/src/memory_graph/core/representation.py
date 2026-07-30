@@ -10,7 +10,7 @@ Design decisions:
 
 from typing import Any
 
-from memory_graph import EdgeType, MemoryGraph
+from memory_graph_core import EdgeType, MemoryGraph, Edge, Node
 
 
 class GraphRepresentation:
