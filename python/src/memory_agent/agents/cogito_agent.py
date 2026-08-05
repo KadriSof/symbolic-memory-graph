@@ -14,7 +14,7 @@ Flow: Comprehend → Retrieve → Consolidate → Reason → Update → Respond
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from memory_graph import MemoryGraph, Node, Edge, EdgeType
 from memory_graph.core import GraphRepresentation
@@ -31,7 +31,7 @@ from memory_agent.agents.react_agent import ReactAgent
 from memory_agent.llm.base import BaseLLM
 from memory_agent.tools import Tool
 
-# ✅ Import from core
+# Import from core
 from memory_agent.core import (
     CogitoState,
     Entity,
@@ -41,6 +41,12 @@ from memory_agent.core import (
     ComprehensionResult,
     ReasoningResult,
     Prompts,
+)
+
+# Import Pydantic schemas
+from memory_agent.core.schemas import (
+    ComprehensionSchema,
+    ConsolidationSchema,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,14 +62,15 @@ class CogitoAgent(ReactAgent):
     - Knowledge delta for minimal updates.
     - Confidence scoring for all knowledge.
     - Automatic memory persistence.
+    - Uses generic structured output parser (no project coupling).
     """
 
     def __init__(
         self,
         llm: BaseLLM,
-        memory_graph: Optional[MemoryGraph] = None,
-        tools: Optional[List[Tool]] = None,
-        config: Optional[Dict[str, Any]] = None,
+        memory_graph: MemoryGraph | None = None,
+        tools: list[Tool] | None = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         self._CLSNAME = self.__class__.__name__
         super().__init__(llm, tools, config)
@@ -131,78 +138,77 @@ class CogitoAgent(ReactAgent):
     def _comprehend(self, query: str) -> ComprehensionResult:
         """
         Unified comprehension: one LLM call for everything.
-        (Overrides the path for a graph-aware comprehension)
+        Uses the generic structured output parser with ComprehensionSchema.
         """
         try:
-            result = self._llm_structured(Prompts.comprehend(query))
+            # Get structured output using the generic parser
+            result = self.llm.get_structured(
+                messages=[{"role": "user", "content": Prompts.comprehend(query)}],
+                model=ComprehensionSchema,
+            )
 
-            # Parse entities
+            if result is None:
+                logger.warning("Comprehension returned None, using fallback")
+                return ComprehensionResult.fallback(query)
+
+            # Convert schema result to internal Entity/Relation objects
             entities = []
-            for e in result.get("entities", []):
+            for e in result.entities:
                 entities.append(
                     Entity(
-                        id=e.get("id", ""),
-                        label=e.get("label", ""),
-                        type=e.get("type"),
-                        metadata=e.get("metadata", {}),
+                        id=e.id,
+                        label=e.label,
+                        type=e.type,
+                        metadata=e.metadata,
                         confidence=Confidence(
-                            score=result.get("confidence", 0.7),
+                            score=e.confidence,
                             source="llm_comprehension",
                         ),
                     )
                 )
 
-            # Parse relations
             relations = []
-            for r in result.get("relations", []):
+            for r in result.relations:
                 relations.append(
                     Relation(
-                        source=r.get("source", ""),
-                        target=r.get("target", ""),
-                        label=r.get("label", ""),
-                        direction=r.get("direction", "asymmetric"),
-                        weight=r.get("weight", 1.0),
+                        source=r.source,
+                        target=r.target,
+                        label=r.label,
+                        direction=r.direction,
+                        weight=r.weight,
                         confidence=Confidence(
-                            score=result.get("confidence", 0.7),
+                            score=r.confidence,
                             source="llm_comprehension",
                         ),
                     )
                 )
 
-            # 2. Get the path from the LLM output
-            path = result.get("modus_operandi", "REACT")
-
-            logger.info(
-                f"[{self._CLSNAME}:_comprehend] Running Graph-Aware verification.."
-            )
-            # 3. Graph-Aware Override: Check if the query references entities in the graph
+            # Graph-Aware Override: Check if the query references entities in the graph
+            path = result.modus_operandi
             graph_has_info = self._graph_has_info(entities, relations)
-            logger.info(f"[{self._CLSNAME}:_comprehend] Graph-Aware verification done!")
 
             if graph_has_info and path == "REACT":
-                logger.info(f"[{self._CLSNAME}] Graph overrid: REACT -> COGITO")
+                logger.info(f"[{self._CLSNAME}] Graph override: REACT -> COGITO")
                 path = "COGITO"
-            else:
-                logger.info(f"[{self._CLSNAME}] No graph info found, using REACT")
-                path = "REACT"
 
-            # Update state with context and entities
+            # Update state
             if hasattr(self.state, "set_context"):
-                self.state.set_context(result.get("active_context", ""))
+                self.state.set_context(result.active_context)
 
             if hasattr(self.state, "add_session_entity"):
                 for entity in entities:
                     self.state.add_session_entity(entity.id)
 
             return ComprehensionResult(
-                reconstructed_query=result.get("reconstructed_query", query),
-                intent=result.get("user_intent", "ask"),
+                reconstructed_query=result.reconstructed_query,
+                intent=result.user_intent,
                 path=path,
-                context=result.get("active_context", ""),
+                context=result.active_context,
                 entities=entities,
                 relations=relations,
                 confidence=Confidence(
-                    score=result.get("confidence", 0.7), source="llm_comprehension"
+                    score=result.confidence,
+                    source="llm_comprehension",
                 ),
             )
 
@@ -211,18 +217,14 @@ class CogitoAgent(ReactAgent):
             return ComprehensionResult.fallback(query)
 
     def _graph_has_info(
-        self, entities: List[Entity], relations: List[Relation]
+        self, entities: list[Entity], relations: list[Relation]
     ) -> bool:
-        """
-        Check if the graph contains information relevant to the query.
-        """
-        # Simple and safe: just check if any entity exists in the graph
+        """Check if the graph contains information relevant to the query."""
         for entity in entities:
             if entity and entity.id:
                 if self.memory.has_node(entity.id):
                     return True
 
-        # Check if any relation source/target exists
         for relation in relations:
             if relation:
                 if relation.source and self.memory.has_node(relation.source):
@@ -233,21 +235,13 @@ class CogitoAgent(ReactAgent):
         return False
 
     # Step 2: RETRIEVE (Graph-First)
-    def _retrieve(self, entities: List[Entity]) -> str:
-        """
-        Retrieve graph context optimized for LLM consumption.
-
-        Strategy:
-        - Small graph (<50 nodes): Full graph representation
-        - Large graph with entities: Subgraph extraction
-        - Large graph without entities: Compact summary
-        """
+    def _retrieve(self, entities: list[Entity]) -> str:
+        """Retrieve graph context optimized for LLM consumption."""
         node_count = len(self.memory.get_nodes())
 
         if node_count == 0:
             return "The memory graph is empty. No previous knowledge available."
 
-        # Small graph: Full representation
         if node_count < self.max_graph_nodes:
             return GraphRepresentation.to_llm_context(
                 graph=self.memory,
@@ -257,7 +251,6 @@ class CogitoAgent(ReactAgent):
                 include_metadata=True,
             )
 
-        # Large graph with entities: Subgraph extraction
         if entities:
             entity_ids = [e.id for e in entities if e.id]
             subgraph = self._extract_subgraph(entity_ids)
@@ -269,7 +262,6 @@ class CogitoAgent(ReactAgent):
                 include_metadata=True,
             )
 
-        # Large graph without entities: Compact summary
         return GraphRepresentation.to_llm_context(
             graph=self.memory,
             format="linearized",
@@ -278,36 +270,31 @@ class CogitoAgent(ReactAgent):
             include_metadata=False,
         )
 
-    def _extract_subgraph(self, entity_ids: List[str]) -> MemoryGraph:
+    def _extract_subgraph(self, entity_ids: list[str]) -> MemoryGraph:
         """Extract a subgraph centered on the given entities."""
         nodes = set()
 
-        # Collect entities and their neighbors
         for eid in entity_ids:
             if self.memory.has_node(eid):
                 nodes.add(eid)
-                # Add neighbors (depth 1)
                 neighbors = self.memory.get_neighbors(eid)
                 for neighbor in neighbors[: self.max_edges_per_node]:
                     nodes.add(neighbor.get_id())
 
-        # Build subgraph
         subgraph = MemoryGraph({"type": "subgraph", "source": "retrieval"})
 
-        # Add nodes
         for nid in nodes:
             if self.memory.has_node(nid):
                 subgraph.add_node(self.memory.get_node(nid))
 
-        # Add edges between nodes in subgraph
         for edge in self.memory.get_edges():
             if edge.get_type() == EdgeType.SYMMETRIC:
                 conn = set(edge.get_connections())
                 if conn.issubset(nodes):
                     subgraph.add_edge(edge)
             else:
-                conn = edge.get_connections()
-                if conn[0] in nodes and conn[1] in nodes:
+                source, target = edge.get_connections()
+                if source in nodes and target in nodes:
                     subgraph.add_edge(edge)
 
         return subgraph
@@ -316,9 +303,7 @@ class CogitoAgent(ReactAgent):
     def _consolidate(
         self, comprehension: ComprehensionResult, context: str
     ) -> KnowledgeDelta:
-        """
-        Consolidate new information into a knowledge delta.
-        """
+        """Consolidate new information into a knowledge delta."""
         try:
             # Prepare primitives for the LLM
             primitives = {
@@ -327,59 +312,44 @@ class CogitoAgent(ReactAgent):
             }
 
             logger.info(
-                f"[{self._CLSNAME}] Consolidating with {len(primitives['entities'])} entities, {len(primitives['relations'])} relations"
+                f"[{self._CLSNAME}] Consolidating with {len(primitives['entities'])} entities, "
+                f"{len(primitives['relations'])} relations"
             )
 
-            result = self._llm_structured(
-                Prompts.consolidate(
-                    context=context,
-                    new_primitives=json.dumps(primitives, indent=2),
-                    query=comprehension.reconstructed_query,
-                )
+            messages = [
+                {
+                    "role": "user",
+                    "content": Prompts.consolidate(
+                        context=context,
+                        new_primitives=json.dumps(primitives, indent=2),
+                        query=comprehension.reconstructed_query,
+                    ),
+                }
+            ]
+            result = self.llm.get_structured(
+                messages=messages,
+                model=ConsolidationSchema,
             )
 
-            # ✅ LOG: Log the raw result keys
-            logger.info(
-                f"[{self._CLSNAME}] Consolidation result keys: {list(result.keys())}"
-            )
+            if result is None:
+                logger.warning("Consolidation returned None, using empty delta")
+                return KnowledgeDelta.empty()
 
-            # Parse confidence
-            confidence_score = result.get("confidence", 0.7)
-            confidence = Confidence(score=confidence_score, source="llm_consolidation")
-
-            # ✅ LOG: Log what we're about to parse
-            new_nodes_data = result.get("new_nodes", [])
-            safe_new_nodes = []
-            for n in new_nodes_data:
-                if isinstance(n, dict):
-                    if n.get("metadata") is None:
-                        n["metadata"] = {}
-                    safe_new_nodes.append(n)
-                else:
-                    logger.warning(f"Skipping invalid node: {n}")
-
-            new_edges_data = result.get("new_edges", [])
-            safe_new_edges = []
-            for e in new_edges_data:
-                if isinstance(e, dict):
-                    if e.get("metadata") is None:
-                        e["metadata"] = {}
-                    safe_new_edges.append(e)
-                else:
-                    logger.warning(f"Skipping invalid edge: {e}")  # Build delta
-
+            # Convert schema nodes/edges to graph nodes/edges
             delta = KnowledgeDelta(
-                new_nodes=[Node.from_json(n) for n in new_nodes_data],
-                new_edges=[Edge.from_json(e) for e in new_edges_data],
+                new_nodes=[Node.from_json(n.model_dump()) for n in result.new_nodes],
+                new_edges=[Edge.from_json(e.model_dump()) for e in result.new_edges],
                 modified_nodes=[
-                    Node.from_json(n) for n in result.get("modified_nodes", [])
+                    Node.from_json(n.model_dump()) for n in result.modified_nodes
                 ],
                 modified_edges=[
-                    Edge.from_json(e) for e in result.get("modified_edges", [])
+                    Edge.from_json(e.model_dump()) for e in result.modified_edges
                 ],
-                conflicts=result.get("conflicts", []),
-                gaps=result.get("gaps", []),
-                confidence=confidence,
+                conflicts=result.conflicts,
+                gaps=result.gaps,
+                confidence=Confidence(
+                    score=result.confidence, source="llm_consolidation"
+                ),
                 source="llm_consolidation",
             )
 
@@ -394,9 +364,7 @@ class CogitoAgent(ReactAgent):
     def _cogito_reason(
         self, query: str, context: str, delta: KnowledgeDelta
     ) -> ReasoningResult:
-        """
-        Reason using the consolidated graph context.
-        """
+        """Reason using the consolidated graph context."""
         try:
             # Call tools to fill gaps if needed
             tool_results = None
@@ -415,14 +383,12 @@ class CogitoAgent(ReactAgent):
             logger.info(
                 f"[{self._CLSNAME}] Sending reason prompt to LLM (length: {len(prompt)})"
             )
+
+            # Reason step uses natural language, not structured output
             reasoning_text = self._llm_call(query=prompt)
+
             logger.info(
                 f"[{self._CLSNAME}] Received reasoning response (length: {len(reasoning_text)})"
-            )
-
-            # ✅ LOG: Log first 200 chars of response
-            logger.info(
-                f"[{self._CLSNAME}] Reasoning response preview: {reasoning_text[:200]}..."
             )
 
             # Extract solution
@@ -461,21 +427,9 @@ class CogitoAgent(ReactAgent):
             return
 
         logger.info(
-            f"[{self._CLSNAME}] Updating memory with {len(delta.new_nodes)} new nodes, {len(delta.new_edges)} new edges"
+            f"[{self._CLSNAME}] Updating memory with {len(delta.new_nodes)} new nodes, "
+            f"{len(delta.new_edges)} new edges"
         )
-
-        # ✅ LOG: Log the first new node to see what we're dealing with
-        if delta.new_nodes:
-            first_node = delta.new_nodes[0]
-            logger.info(
-                f"[{self._CLSNAME}] First new node: id={first_node.get_id()}, label={first_node.get_label()}, metadata={first_node.get_metadata()}"
-            )
-
-        if delta.new_edges:
-            first_edge = delta.new_edges[0]
-            logger.info(
-                f"[{self._CLSNAME}] First new edge: id={first_edge.get_id()}, label={first_edge.get_label()}"
-            )
 
         added_nodes = 0
         added_edges = 0
@@ -538,7 +492,7 @@ class CogitoAgent(ReactAgent):
             return reasoning.solution
 
     # HELPERS
-    def _store_conflict(self, conflict: Dict[str, Any]) -> None:
+    def _store_conflict(self, conflict: dict[str, Any]) -> None:
         """Store a conflict in the graph for later resolution."""
         node = Node(
             id=f"conflict_{datetime.now().timestamp()}",
@@ -571,11 +525,10 @@ class CogitoAgent(ReactAgent):
             "guess",
         ]
         uncertainty_count = sum(1 for m in uncertainty_markers if m in text.lower())
-
         confidence = max(0.3, 0.9 - (uncertainty_count * 0.1))
         return min(1.0, confidence)
 
-    def _call_tools(self, gaps: List[str]) -> List[Dict[str, Any]]:
+    def _call_tools(self, gaps: list[str]) -> list[dict[str, Any]]:
         """Call tools to fill gaps."""
         results = []
         for gap in gaps:
@@ -606,12 +559,10 @@ class CogitoAgent(ReactAgent):
     # LLM Helpers
     def _llm_call(
         self,
-        messages: Optional[List[Dict[str, str]]] = None,
-        query: Optional[str] = None,
+        messages: list[dict[str, str]] | None = None,
+        query: str | None = None,
     ) -> str:
-        """
-        Call the LLM with either messages or a query string.
-        """
+        """Call the LLM with either messages or a query string."""
         if messages is not None:
             msgs = messages
         elif query is not None:
@@ -631,44 +582,6 @@ class CogitoAgent(ReactAgent):
         response = self.llm.chat(messages=msgs)
         self.llm_calls += 1
         return response
-
-    def _llm_structured(self, query: str) -> Dict[str, Any]:
-        """Call the LLM and parse structured output."""
-        messages = [
-            {
-                "role": "system",
-                "content": "You are the Cogito Agent. Return valid JSON only.",
-            },
-            {"role": "user", "content": query},
-        ]
-        response = self._llm_call(messages=messages)
-
-        # ✅ LOG: Log the raw response
-        logger.info(
-            f"[{self._CLSNAME}] Structured response (first 300 chars): {response[:300]}..."
-        )
-
-        if not response:
-            logger.warning(f"[{self._CLSNAME}] Empty response from LLM")
-            return {"raw": ""}
-
-        try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                json_str = response[start:end]
-                result = json.loads(json_str)
-                if isinstance(result, dict):
-                    # ✅ LOG: Successfully parsed JSON
-                    logger.info(
-                        f"[{self._CLSNAME}] Successfully parsed JSON with keys: {list(result.keys())}"
-                    )
-                    return result
-            logger.warning(f"[{self._CLSNAME}] No JSON object found in response")
-            return {"raw": response}
-        except json.JSONDecodeError as e:
-            logger.error(f"[{self._CLSNAME}] JSON decode error: {e}")
-            return {"raw": response}
 
     # SERIALIZATION
     def save_memory(self, filepath: str) -> None:
@@ -702,17 +615,9 @@ class CogitoAgent(ReactAgent):
         """Log initialization details."""
         logger.info(f"[{self._CLSNAME}] Initialized")
         logger.info(
-            f"  Memory: {len(self.memory.get_nodes())} nodes, {len(self.memory.get_edges())} edges"
+            f"  Memory: {len(self.memory.get_nodes())} nodes, "
+            f"{len(self.memory.get_edges())} edges"
         )
         logger.info(f"  Confidence threshold: {self.confidence_threshold}")
         logger.info(f"  Context format: {self.context_format}")
         logger.info(f"  Tools: {list(self.tools.keys()) if self.tools else 'None'}")
-
-    def _safe_json_dump(data, max_len=500):
-        """Safely dump JSON data for debugging."""
-        try:
-            if isinstance(data, dict):
-                return json.dumps(data, indent=2)[:max_len]
-            return str(data)[:max_len]
-        except Exception:
-            return "Unable to serialize"

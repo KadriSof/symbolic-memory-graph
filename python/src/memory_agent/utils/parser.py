@@ -7,7 +7,7 @@ import re
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional, Callable, Type, TypeVar, Dict
+from typing import Any, Optional, Callable, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ class JSONExtractor:
     """Extracts JSON from LLM responses with optimized multi-strategy extraction."""
 
     @staticmethod
-    def extract(text: str) -> Optional[str]:
+    def extract(text: str) -> str | None:
         """Extract JSON using multiple strategies with logging."""
         if not text or not text.strip():
             logger.debug("Empty response text")
@@ -68,7 +68,7 @@ class JSONExtractor:
             return False
 
     @staticmethod
-    def _extract_balanced(text: str) -> Optional[str]:
+    def _extract_balanced(text: str) -> str | None:
         stack = []
         start_idx = -1
         in_string = False
@@ -107,7 +107,7 @@ class JSONExtractor:
         return None
 
     @staticmethod
-    def _extract_key_value_pairs(text: str) -> Optional[str]:
+    def _extract_key_value_pairs(text: str) -> str | None:
         result = {}
         pattern = re.compile(
             r'["\']?([^"\'=:]+)["\']?\s*[:=]\s*["\']?([^"\'\n]+)["\']?'
@@ -166,7 +166,7 @@ class JSONRepair:
         return repaired
 
     @staticmethod
-    def repair_and_validate(text: str) -> Optional[str]:
+    def repair_and_validate(text: str) -> str | None:
         if not text:
             return None
         repaired = JSONRepair.repair(text)
@@ -178,8 +178,8 @@ class JSONSanitizer:
 
     def __init__(
         self,
-        type_conversions: Optional[Dict[str, Callable[[Any], Any]]] = None,
-        default_values: Optional[Dict[str, Any]] = None,
+        type_conversions: dict[str, Callable[[Any], Any]] | None = None,
+        default_values: dict[str, Any] | None = None,
         remove_nulls: bool = True,
         raise_on_missing: bool = False,
         max_depth: int = 10,
@@ -202,7 +202,7 @@ class JSONSanitizer:
         else:
             return self._sanitize_value(data)
 
-    def _sanitize_dict(self, data: Dict[str, Any], depth: int) -> Dict[str, Any]:
+    def _sanitize_dict(self, data: dict[str, Any], depth: int) -> dict[str, Any]:
         out = {}
 
         for key, value in data.items():
@@ -256,7 +256,7 @@ class StructuredOutputParser:
 
     def __init__(
         self,
-        sanitizer: Optional[JSONSanitizer] = None,
+        sanitizer: JSONSanitizer | None = None,
         fallback_on_error: bool = True,
         log_errors: bool = True,
     ):
@@ -269,7 +269,7 @@ class StructuredOutputParser:
         response: str,
         schema: Type[T],
         context: str = "",
-    ) -> Optional[T]:
+    ) -> T | None:
         """
         Parse LLM response into ANY model.
 
@@ -313,10 +313,10 @@ class StructuredOutputParser:
 
     def parse_dict(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         schema: Type[T],
         context: str = "",
-    ) -> Optional[T]:
+    ) -> T | None:
         """Parse already-parsed dict with automatic extraction."""
         return self._parse_data(data, schema, context)
 
@@ -325,7 +325,7 @@ class StructuredOutputParser:
         data: Any,
         schema: Type[T],
         context: str = "",
-    ) -> Optional[T]:
+    ) -> T | None:
         """
         Core parsing logic - tries multiple strategies to match ANY structure.
         """
@@ -372,7 +372,7 @@ class StructuredOutputParser:
 
         return None
 
-    def _try_validate(self, data: Any, schema: Type[T]) -> Optional[T]:
+    def _try_validate(self, data: Any, schema: Type[T]) -> T | None:
         """Try to validate data against schema."""
         if not isinstance(data, dict):
             return None
@@ -396,7 +396,7 @@ class StructuredOutputParser:
         except Exception:
             return None
 
-    def _find_by_required_fields(self, data: Any, schema: Type[T]) -> Optional[T]:
+    def _find_by_required_fields(self, data: Any, schema: Type[T]) -> T | None:
         """
         Find any dict in the data that has all required fields of the schema.
         """
@@ -416,7 +416,7 @@ class StructuredOutputParser:
         data: Any,
         required_fields: set[str],
         schema: Type[T],
-    ) -> Optional[T]:
+    ) -> T | None:
         """Recursively search for required fields."""
         if isinstance(data, dict):
             # Check if this dict has all required fields
@@ -452,7 +452,7 @@ class StructuredOutputParser:
             elif hasattr(schema, "__fields__"):
                 # Pydantic v1
                 return {
-                    name for name, field in schema.__fields__.items() if field.required
+                    name for name, field in schema.__fields__.items() if field.required  # type: ignore
                 }
             else:
                 # Fallback: use annotations
@@ -485,10 +485,10 @@ class StructuredOutputParser:
 def parse_structured_output(
     response: str,
     schema: Type[T],
-    fallback: Optional[T] = None,
-    sanitizer: Optional[JSONSanitizer] = None,
+    fallback: T | None = None,
+    sanitizer: JSONSanitizer | None = None,
     context: str = "",
-) -> Optional[T]:
+) -> T | None:
     parser = StructuredOutputParser(sanitizer=sanitizer)
     result = parser.parse(response, schema, context)
     return result if result is not None else fallback
@@ -498,7 +498,7 @@ def parse_structured_output_factory(
     response: str,
     schema: Type[T],
     fallback_factory: Callable[[], T],
-    sanitizer: Optional[JSONSanitizer] = None,
+    sanitizer: JSONSanitizer | None = None,
     context: str = "",
 ) -> T:
     parser = StructuredOutputParser(sanitizer=sanitizer)

@@ -1,4 +1,5 @@
 # python/src/memory_agent/core/schemas.py
+# Pydantic Validation Schemas: contracts between the agent and LLM
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -164,46 +165,3 @@ def get_llm_format_instructions(model: Type[BaseModel]) -> str:
     lines.append("5. If you cannot provide a value, use null or omit optional fields")
 
     return "\n".join(lines)
-
-
-if __name__ == "__main__":
-    mock_entities = [
-        EntitySchema(
-            id="entity_1",
-            label="Tunisia",
-            type="place",
-            metadata={"capital": "Tunis"},
-            confidence=0.9,
-        ),
-        EntitySchema(
-            id="entity_2",
-            label="Mediterranean Sea",
-            type="place",
-            metadata={"type": "sea"},
-            confidence=0.85,
-        ),
-    ]
-
-    mock_relations = [
-        RelationSchema(
-            source="entity_1",
-            target="entity_2",
-            label="borders",
-            direction="asymmetric",
-            weight=0.8,
-            confidence=0.95,
-        )
-    ]
-
-    # Create a mock ComprehensionSchema instance
-    mock_comprehension = ComprehensionSchema(
-        reconstructed_query="What countries border the Mediterranean Sea?",
-        user_intent="ask",
-        modus_operandi="REACT",
-        active_context="geography",
-        entities=mock_entities,
-        relations=mock_relations,
-        confidence=0.8,
-    )
-
-    print(mock_comprehension.model_dump_json(indent=2))
