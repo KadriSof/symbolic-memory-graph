@@ -79,7 +79,6 @@ Edge Edge::fromJson(const nlohmann::json &edgeJson) {
 
   float weight = edgeJson.value("weight", 1.0f);
 
-  // Fix: Handle null metadata
   nlohmann::json metadata;
   if (edgeJson.contains("metadata") && !edgeJson["metadata"].is_null()) {
     metadata = edgeJson["metadata"];
@@ -89,17 +88,20 @@ Edge Edge::fromJson(const nlohmann::json &edgeJson) {
 
   // Parse connections...
   Connections connections;
+  bool isGroupEdge = false;
+
   if (edgeJson["connections"]["type"] == "symmetric") {
     auto nodes =
         edgeJson["connections"]["nodes"].get<std::vector<std::string>>();
     SymmetricConnections conn_set(nodes.begin(), nodes.end());
     connections = conn_set;
+    isGroupEdge = true;
   } else {
     std::string source = edgeJson["connections"]["source"];
     std::string target = edgeJson["connections"]["target"];
     connections = AsymmetricConnections(source, target);
   }
 
-  return Edge(id, label, type, connections, weight, metadata);
+  return Edge(id, label, type, connections, weight, metadata, isGroupEdge);
 }
 } // namespace memory_graph
