@@ -41,6 +41,17 @@ from .llm import BaseLLM, GenerationConfig, GroqLLM, LlamaCppLLM
 # Tools
 from .tools import Tool
 
+# Utils
+
+from .utils import (
+    JSONExtractor,
+    JSONRepair,
+    JSONSanitizer,
+    StructuredOutputParser,
+    parse_structured_output,
+    parse_structured_output_factory,
+)
+
 # Version
 __version__ = "0.1.0"
 
@@ -69,6 +80,14 @@ __all__ = [
     "LlamaCppLLM",
     # Tools
     "Tool",
+    # Utils
+    "utils",
+    "JSONExtractor",
+    "JSONRepair",
+    "JSONSanitizer",
+    "StructuredOutputParser",
+    "parse_structured_output",
+    "parse_structured_output_factory",
 ]
 
 # Package Info
