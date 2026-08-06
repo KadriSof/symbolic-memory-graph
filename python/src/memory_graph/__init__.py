@@ -2,16 +2,8 @@
 MemoryGraph - Python bindings for C++ memory graph library
 """
 
-import sys
-from pathlib import Path
-
-# Add the current directory to Python's path for the .so file
-_current_dir = Path(__file__).parent
-if str(_current_dir) not in sys.path:
-    sys.path.insert(0, str(_current_dir))
-
 try:
-    from memory_graph_core import (
+    from memory_graph.memory_graph_core import (
         AsymmetricConnections,
         Edge,
         EdgeType,
