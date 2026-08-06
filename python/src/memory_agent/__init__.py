@@ -42,7 +42,6 @@ from .llm import BaseLLM, GenerationConfig, GroqLLM, LlamaCppLLM
 from .tools import Tool
 
 # Utils
-
 from .utils import (
     JSONExtractor,
     JSONRepair,
@@ -81,7 +80,6 @@ __all__ = [
     # Tools
     "Tool",
     # Utils
-    "utils",
     "JSONExtractor",
     "JSONRepair",
     "JSONSanitizer",

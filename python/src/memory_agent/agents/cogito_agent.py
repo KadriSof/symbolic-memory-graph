@@ -18,7 +18,7 @@ from typing import Any
 
 from memory_graph import MemoryGraph, Node, Edge, EdgeType
 from memory_graph.core import GraphRepresentation
-from memory_graph_core import (
+from memory_graph.core import (
     bfs,
     find_nodes_by_label,
     find_nodes_by_metadata,
