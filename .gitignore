@@ -7,6 +7,7 @@ cmake-build-*/
 *.dll
 
 # Python
+python/.env
 python/.venv/
 python/__pycache__/
 python/**/__pycache__/
@@ -27,6 +28,7 @@ python/src/memory_graph/*.pyd
 *.app
 
 # IDE
+.clangd
 .vscode/
 .idea/
 *.swp
