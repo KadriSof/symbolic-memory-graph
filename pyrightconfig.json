@@ -1,0 +1,19 @@
+{
+  "include": ["python/src"],
+  "exclude": ["**/__pycache__", "**/.venv", "**/build", "**/bindings"],
+  "venvPath": "python",
+  "venv": ".venv",
+  "stubPath": "python/src",
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportImportCycles": false,
+  "reportMissingModuleSource": false,
+  "extraPaths": [
+    "python/src",
+    "python/src/memory_graph",
+    "python/src/memory_agent"
+  ]
+}
