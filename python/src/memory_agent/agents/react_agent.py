@@ -262,7 +262,7 @@ class ReactAgent(BaseAgent):
             "Please ensure you follow the ReAct trajectory format exactly."
             f"</{MARKER_TOOL_OUTPUT}>"
         )
-        self.state.add_message(role="tool", content=error_msg)
+        self.state.add_message(role="user", content=error_msg)
         return None
 
     def _handle_final_answer(
@@ -347,7 +347,7 @@ class ReactAgent(BaseAgent):
                 f"Ensure you use <{MARKER_TOOL_INPUT}> with valid, complete JSON enclosed in curly braces {{}}."
                 f"</{MARKER_TOOL_OUTPUT}>"
             )
-            self.state.add_message(role="tool", content=error_msg)
+            self.state.add_message(role="user", content=error_msg)
 
     def _execute_tool(
         self,

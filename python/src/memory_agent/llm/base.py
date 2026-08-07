@@ -1,45 +1,30 @@
 """
 Base LLM abstractions for the Cogito Agent.
-
-Design goals:
-- provider-agnostic
-- lightweight
-- synchronous-first
-- easy to extend
-- supports structured output for agent steps
-- no framework coupling
-
-Any future provider should implement:
-- chat(messages) -> str
-- structured_output(messages, schema) -> dict
+Compact, focused, and leveraging the robust JSON parser.
 """
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Type, TypeVar, Optional
 
-# Type aliases for clarity
+from pydantic import BaseModel
+
+from memory_agent.utils.parser import StructuredOutputParser
+
 RoleType = Literal["system", "user", "assistant", "tool"]
-ROLES = ("system", "user", "assistant", "tool")
 Message = dict[str, str]
 Messages = list[Message]
+
+T = TypeVar("T", bound=BaseModel)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class GenerationConfig:
-    """
-    Runtime generation parameters for LLM providers.
-
-    Attributes:
-        temperature: Controls randomness (0.0 = deterministic, 1.0 = creative)
-        max_tokens: Maximum tokens to generate
-        top_p: Nucleus sampling threshold
-        frequency_penalty: Penalty for repeated tokens
-        presence_penalty: Penalty for new topics
-        seed: Random seed for reproducibility
-    """
+    """Runtime generation parameters."""
 
     temperature: float = 0.2
     max_tokens: int = 2048
@@ -47,63 +32,34 @@ class GenerationConfig:
     frequency_penalty: float = 0.0
     presence_penalty: float = 0.0
     seed: int | None = None
-
-    # Provider-specific overrides
     extra: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseLLM(ABC):
     """
-    Abstract base class for all LLM providers.
+    Abstract base class for LLM providers.
 
-    The Cogito Agent uses this interface to interact with any LLM.
-    Providers should implement:
-    1. chat() - for natural language interaction
-    2. structured_output() - for structured data extraction
-
-    Example:
-        >>> llm = GroqLLM(model="mixtral-8x7b-32768")
-        >>> response = llm.chat([{"role": "user", "content": "Hello!"}])
-        >>> data = llm.structured_output(
-        ...     messages=[{"role": "user", "content": "Extract entities"}],
-        ...     schema={"type": "object", "properties": {"entities": {"type": "array"}}}
-        ... )
+    Two core methods:
+    1. chat() - natural language response
+    2. get_structured() - structured output with automatic parsing
     """
 
     def __init__(
         self, model: str, config: GenerationConfig | None = None, **kwargs: Any
     ) -> None:
-        """
-        Initialize the LLM provider.
-
-        Args:
-            model: Model identifier (provider-specific)
-            config: Generation configuration
-            **kwargs: Additional provider-specific arguments
-        """
         self.model = model
         self.config = config or GenerationConfig()
         self._provider_kwargs = kwargs
 
+        # One parser instance, reused for all structured calls
+        self._parser = StructuredOutputParser(
+            fallback_on_error=True,
+            log_errors=True,
+        )
+
     @abstractmethod
     def chat(self, messages: Messages) -> str:
-        """
-        Generate a chat completion from messages.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-
-        Returns:
-            The assistant's response as a string
-
-        Example:
-            >>> messages = [
-            ...     {"role": "system", "content": "You are a helpful assistant."},
-            ...     {"role": "user", "content": "What is 2+2?"}
-            ... ]
-            >>> response = llm.chat(messages)
-            "2+2 equals 4"
-        """
+        """Generate a chat completion."""
         raise NotImplementedError
 
     @abstractmethod
@@ -111,55 +67,50 @@ class BaseLLM(ABC):
         self, messages: Messages, schema: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
         """
-        Generate structured output (JSON) from messages.
+        Generate structured output using provider's native support.
 
-        This is used for entity extraction, consolidation, and other agent steps
-        that require structured data.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-            schema: JSON Schema describing the expected output structure
-            **kwargs: Additional provider-specific arguments
-
-        Returns:
-            Parsed JSON response as a dictionary
-
-        Example:
-            >>> schema = {
-            ...     "type": "object",
-            ...     "properties": {
-            ...         "entities": {"type": "array", "items": {"type": "string"}},
-            ...         "relations": {"type": "array", "items": {"type": "object"}}
-            ...     }
-            ... }
-            >>> result = llm.structured_output(messages, schema)
-            {"entities": ["Geralt", "Ciri"], "relations": [{"source": "Geralt", "target": "Ciri"}]}
+        If not supported, raise NotImplementedError to trigger fallback.
         """
         raise NotImplementedError
 
+    def get_structured(
+        self,
+        messages: Messages,
+        model: Type[T],
+        **kwargs: Any,
+    ) -> Optional[T]:
+        """
+        Get structured output with automatic fallback to chat+parse.
+
+        Uses the robust JSON parser we already built.
+        """
+        try:
+            # Try native structured output first
+            try:
+                schema = model.model_json_schema()
+
+            except AttributeError:
+                # Fallback for Pydantic v1 (if there are anyone there still using it --)
+                schema = model.schema() if hasattr(model, "schema") else {}  # type: ignore
+
+            raw = self.structured_output(messages, schema, **kwargs)
+            return self._parser.parse_dict(raw, model)
+
+        except NotImplementedError:
+            # Fallback: chat + parse
+            logger.debug(f"{self.__class__.__name__}: Using chat+parse fallback")
+            response = self.chat(messages, **kwargs)
+            return self._parser.parse(response, model)
+
+        except Exception as e:
+            logger.error(f"Structured output failed: {e}")
+            return None
+
     def with_config(self, **kwargs: Any) -> "BaseLLM":
-        """
-        Create a copy with updated configuration.
+        """Create a copy with updated configuration."""
+        from dataclasses import replace
 
-        This is useful for one-off requests with different parameters.
-
-        Example:
-            >>> creative_llm = llm.with_config(temperature=0.9, max_tokens=4096)
-        """
-        new_config = GenerationConfig(
-            temperature=kwargs.get("temperature", self.config.temperature),
-            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-            top_p=kwargs.get("top_p", self.config.top_p),
-            frequency_penalty=kwargs.get(
-                "frequency_penalty", self.config.frequency_penalty
-            ),
-            presence_penalty=kwargs.get(
-                "presence_penalty", self.config.presence_penalty
-            ),
-            seed=kwargs.get("seed", self.config.seed),
-            extra=kwargs.get("extra", self.config.extra.copy()),
-        )
-
+        new_config = replace(self.config, **kwargs)
         return self.__class__(
             model=kwargs.get("model", self.model),
             config=new_config,
@@ -167,4 +118,4 @@ class BaseLLM(ABC):
         )
 
     def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} model={self.model} config={self.config}>"
+        return f"<{self.__class__.__name__} model={self.model}>"

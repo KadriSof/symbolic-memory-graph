@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from groq import Groq as GroqClient
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from ..utils.parser import JSONRepair
 from .base import BaseLLM, GenerationConfig, Messages
 
 load_dotenv()
@@ -89,7 +90,7 @@ class GroqLLM(BaseLLM):
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
     )
-    def chat(self, messages: Messages) -> str:
+    def chat(self, messages: Messages, **kwargs: Any) -> str:
         """
         Generate a chat completion from messages.
 
@@ -105,17 +106,22 @@ class GroqLLM(BaseLLM):
         try:
             self.logger.debug(f"Chat request: {len(messages)} messages")
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,  # type: ignore
-                temperature=self.config.temperature,
-                max_completion_tokens=self.config.max_tokens,
-                top_p=self.config.top_p,
-                frequency_penalty=self.config.frequency_penalty,
-                presence_penalty=self.config.presence_penalty,
-                seed=self.config.seed,
-                **self._provider_kwargs,
-            )
+            params = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.config.temperature,
+                "max_completion_tokens": self.config.max_tokens,
+                "top_p": self.config.top_p,
+                "frequency_penalty": self.config.frequency_penalty,
+                "presence_penalty": self.config.presence_penalty,
+            }
+
+            if self.config.seed is not None:
+                params["seed"] = self.config.seed
+
+            params.update(kwargs)
+
+            response = self.client.chat.completions.create(**params)
 
             content = response.choices[0].message.content
             if content is None:
@@ -128,6 +134,9 @@ class GroqLLM(BaseLLM):
             self.logger.error(f"Chat generation failed: {str(e)}")
             raise
 
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
     def structured_output(
         self,
         messages: Messages,
@@ -154,6 +163,8 @@ class GroqLLM(BaseLLM):
         try:
             self.logger.debug(f"Structured output request: {len(messages)} messages")
 
+            safe_messages = [{**m} for m in messages]
+
             # Add system instruction for JSON output
             system_prompt = (
                 "You must respond with valid JSON only. "
@@ -162,52 +173,73 @@ class GroqLLM(BaseLLM):
             )
 
             # Inject system message if not already present
-            has_system = any(m.get("role") == "system" for m in messages)
+            has_system = any(m.get("role") == "system" for m in safe_messages)
             if not has_system:
-                messages = [{"role": "system", "content": system_prompt}] + messages
+                safe_messages = [
+                    {"role": "system", "content": system_prompt}
+                ] + safe_messages
             else:
                 # Update existing system message
-                for m in messages:
+                for m in safe_messages:
                     if m.get("role") == "system":
-                        m["content"] = system_prompt + "\n\n" + m["content"]
+                        m["content"] = f"{system_prompt}\n\n{m['content']}"
 
             # Add schema instruction
             schema_prompt = f"\n\nExpected JSON schema:\n{json.dumps(schema, indent=2)}"
-            messages[-1]["content"] = messages[-1]["content"] + schema_prompt
+            safe_messages[-1] = {
+                **safe_messages[-1],
+                "content": safe_messages[-1]["content"] + schema_prompt,
+            }
 
             # Call API with JSON mode
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,  # type: ignore
-                temperature=self.config.temperature,
-                max_completion_tokens=self.config.max_tokens,
-                top_p=self.config.top_p,
-                frequency_penalty=self.config.frequency_penalty,
-                presence_penalty=self.config.presence_penalty,
-                seed=self.config.seed,
-                response_format={"type": "json_object"},
-                **self._provider_kwargs,
-                **kwargs,
-            )
+            params = {
+                "model": self.model,
+                "messages": safe_messages,
+                "temperature": self.config.temperature,
+                "max_completion_tokens": self.config.max_tokens,
+                "top_p": self.config.top_p,
+                "frequency_penalty": self.config.frequency_penalty,
+                "presence_penalty": self.config.presence_penalty,
+                "response_format": {"type": "json_object"},
+            }
+
+            if self.config.seed is not None:
+                params["seed"] = self.config.seed
+
+            params.update(kwargs)
+
+            response = self.client.chat.completions.create(**params)
 
             content = response.choices[0].message.content
             if content is None:
                 raise ValueError("Empty response from Groq API")
 
-            # Parse JSON
             try:
-                result = json.loads(content)
-            except json.JSONDecodeError as e:
-                self.logger.warning(
-                    f"Failed to parse JSON response: {content[:200]}..."
+                return json.loads(content)
+            except json.JSONDecodeError:
+                self.logger.debug(
+                    "[GroqLLM:structured_output] Native JSON parse failed, attempting robust repair..."
                 )
-                raise ValueError(f"Invalid JSON response: {str(e)}")
 
-            self.logger.debug(f"Structured output: {len(result)} keys")
-            return result
+            repaired = JSONRepair.repair_and_validate(text=content)
+            if repaired:
+                self.logger.debug(
+                    "[GroqLLM:structured_output] Successfully repaired JSON"
+                )
+                return json.loads(repaired)
+
+            raise ValueError(
+                "[GroqLLM:structured_output] Invalid JSON and repair failed. Trigerring chat fallback..."
+            )
+
+        except ValueError:
+            # We raise ValueError so the BaseLLM class catches it and triggers the chat fallback (brains so big!)
+            raise
 
         except Exception as e:
-            self.logger.error(f"Structured output failed: {str(e)}")
+            self.logger.error(
+                f"[GroqLLM:structured_output] Groq API request failed:\n{str(e)}\n---"
+            )
             raise
 
     def __repr__(self) -> str:

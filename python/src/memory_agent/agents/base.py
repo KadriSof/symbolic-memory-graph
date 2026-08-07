@@ -94,8 +94,6 @@ class BaseAgent(ABC):
         self.max_steps = self.config.get("max_steps", 10)
         self.debug = self.config.get("debug", False)
 
-        self._log_init()
-
     @abstractmethod
     def _initialize_state(self) -> BaseAgentState:
         """Create the agent-specific state interface"""
