@@ -184,20 +184,34 @@ else
 fi
 
 # 5. Verify installation
+# 5. Verify installation and .so placement
 print_header "Verifying installation"
 cd "$PROJECT_ROOT/python"
 source .venv/bin/activate
 
-if python -c "from memory_graph import MemoryGraph, Node, Edge; print('[X] Import successful!')" 2>/dev/null; then
-  print_success "Python import successful"
-else
-  print_error "[!] Python import failed"
+# NEW SAFETY CHECK: Verify the .so file was actually copied to the right place
+SO_FILE=$(find "$PROJECT_ROOT/python/src/memory_graph" -maxdepth 1 -name "memory_graph_core*.so" | head -n 1)
+
+if [ -z "$SO_FILE" ]; then
+  print_error "C++ binding (.so file) not found in python/src/memory_graph/"
+  print_info "Please ensure your CMakeLists.txt has this POST_BUILD command:"
+  print_info "  add_custom_command(TARGET memory_graph_core POST_BUILD"
+  print_info "      COMMAND \${CMAKE_COMMAND} -E copy \$<TARGET_FILE:memory_graph_core> \${CMAKE_SOURCE_DIR}/python/src/memory_graph/)"
   exit 1
 fi
 
-# ============================================================================
+print_success "Found binding: $(basename "$SO_FILE")"
+
+# Now test the import
+if python -c "from memory_graph import MemoryGraph, Node, Edge; print('[X] Import successful!')" 2>/dev/null; then
+  print_success "Python import successful"
+else
+  print_error "[!] Python import failed despite .so file being present."
+  print_info "This usually means the .so was compiled for a different Python version."
+  exit 1
+fi
+
 # 6. Run tests
-# ============================================================================
 if [ "$SKIP_TESTS" = false ]; then
   print_header "Running tests"
 

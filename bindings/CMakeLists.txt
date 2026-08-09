@@ -31,13 +31,18 @@ target_compile_definitions(memory_graph_core PRIVATE
     VERSION_INFO=\"${PROJECT_VERSION}\"
 )
 
-# Auto-copy .so to Python package on build
+# Auto-copy .so/.pyd/.dylib to Python package on build (Cross-platform & ABI-safe)
 add_custom_command(
   TARGET memory_graph_core 
-
   POST_BUILD
+    # 1. Ensure the destination directory exists
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/python/src/memory_graph
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:memory_graph_core> ${CMAKE_SOURCE_DIR}/python/src/memory_graph/memory_graph_core.so
+    
+    # 2. Copy the file, preserving its platform-specific name (e.g., .cpython-312-x86_64-linux-gnu.so)
+    COMMAND ${CMAKE_COMMAND} -E copy 
+        $<TARGET_FILE:memory_graph_core> 
+        ${CMAKE_SOURCE_DIR}/python/src/memory_graph/
+        
     COMMENT "Copying shared library to Python package..."
 )
 
