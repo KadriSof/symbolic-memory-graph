@@ -32,6 +32,15 @@ from memory_graph.memory_graph_core import (
     Edge,
     EdgeType,
     MemoryGraph,
+    CompressionType,
+    SerializationOptions,
+)
+
+# High-level Python traversal helpers
+from .traversal import (
+    find_entities_by_type,
+    get_confidence_filtered_subgraph,
+    find_shortest_path_with_details,
 )
 
 __all__ = [
@@ -43,6 +52,8 @@ __all__ = [
     "Edge",
     "EdgeType",
     "MemoryGraph",
+    "CompressionType",
+    "SerializationOptions",
     # Traversal functions (from C++)
     "bfs",
     "dfs",
@@ -56,4 +67,8 @@ __all__ = [
     "find_nodes_by_label",
     "find_nodes_by_metadata",
     "get_context_window",
+    # High-level helpers
+    "find_entities_by_type",
+    "get_confidence_filtered_subgraph",
+    "find_shortest_path_with_details",
 ]
