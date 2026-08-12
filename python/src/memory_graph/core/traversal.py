@@ -235,3 +235,62 @@ def find_shortest_path_with_details(
                     break
 
     return {"path": path_ids, "nodes": nodes, "edges": edges}
+
+
+def find_communities(
+    graph: MemoryGraph, min_nodes: int = 3, max_communities: int = 5
+) -> list[list[str]]:
+    """
+    Find communities/clusters in the graph using connected components.
+
+    Simple community detection based on connected components
+    with confidence-weighted clustering.
+
+    Args:
+        graph: The MemoryGraph to analyze
+        min_nodes: Minimum nodes in a community
+        max_communities: Maximum number of communities to return
+
+    Returns:
+        List of communities (node ID lists), sorted by size (largest first)
+
+    Example:
+        >>> communities = find_communities(graph)
+        >>> # Returns: [["geralt", "yennefer", "ciri"], ["vesemir", "eskel"]] (cool! innit!)
+    """
+    nodes = graph.get_nodes()
+    if not nodes:
+        return []
+
+    visited = set()
+    communities = []
+
+    for node in nodes:
+        node_id = node.get_id()
+        if node_id in visited:
+            continue
+
+        # BFS to find connected component
+        component = bfs(graph=graph, start=node_id, max_depth=-1)
+
+        # Add confidence scores
+        scored_component = []
+        for nid in component:
+            if graph.has_node(nid):
+                node = graph.get_node(nid)
+                metadata = node.get_metadata()
+                confidence = metadata.get("confidence", 1.0) if metadata else 1.0
+                scored_component.append((nid, confidence))
+
+        # Sort by confidence (highest first)
+        scored_component.sort(key=lambda x: x[1], reverse=True)
+
+        if len(scored_component) >= min_nodes:
+            communities.append([nid for nid, _ in scored_component])
+            visited.update([nid for nid, _ in scored_component])
+
+    # Sort communities by size (largest first)
+    communities.sort(key=len, reverse=True)
+
+    # Limit number of communities
+    return communities[:max_communities]
