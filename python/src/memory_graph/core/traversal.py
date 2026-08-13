@@ -203,13 +203,16 @@ def find_shortest_path_with_details(
         or None if no path exists.
     """
     try:
+        if not graph.has_node(from_node) or not graph.has_node(to_node):
+            return None
+
         path_ids = shortest_path(graph, from_node, to_node)
     except RuntimeError:
         # C++ throws RuntimeError if no path is found
         return None
 
     if not path_ids or len(path_ids) < 2:
-        return {"path": path_ids, "nodes": [], "edges": []}
+        return None
 
     nodes = [graph.get_node(nid) for nid in path_ids]
     edges = []
