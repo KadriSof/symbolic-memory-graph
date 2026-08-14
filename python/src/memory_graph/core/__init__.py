@@ -41,6 +41,7 @@ from .traversal import (
     find_entities_by_type,
     get_confidence_filtered_subgraph,
     find_shortest_path_with_details,
+    find_communities,
 )
 
 __all__ = [
@@ -71,4 +72,5 @@ __all__ = [
     "find_entities_by_type",
     "get_confidence_filtered_subgraph",
     "find_shortest_path_with_details",
+    "find_communities",
 ]
