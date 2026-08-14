@@ -16,16 +16,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from memory_graph import MemoryGraph, Node, Edge, EdgeType
+from memory_graph import MemoryGraph, Node, Edge
 from memory_graph.core import GraphRepresentation
-from memory_graph.core import (
-    bfs,
-    find_nodes_by_label,
-    find_nodes_by_metadata,
-    has_cycle,
-    shortest_path,
-    subgraph,
-)
 
 from memory_agent.agents.react_agent import ReactAgent
 from memory_agent.llm.base import BaseLLM
@@ -47,6 +39,13 @@ from memory_agent.core import (
 from memory_agent.core.schemas import (
     ComprehensionSchema,
     ConsolidationSchema,
+)
+
+from memory_graph.core.traversal import (
+    find_shortest_path_with_details,
+    get_confidence_filtered_subgraph,
+    subgraph_by_predicate,
+    find_communities,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +85,14 @@ class CogitoAgent(ReactAgent):
         self.max_graph_nodes = self.config.get("max_graph_nodes", 50)
         self.max_edges_per_node = self.config.get("max_edges_per_node", 5)
 
+        # Traversal configuration
+        self.subgraph_radius = self.config.get("subgraph_radius", 2)
+        self.min_weight = self.config.get("min_weight", 0.0)
+        self.max_tokens = self.config.get("max_tokens", 4096)
+        self.enable_community_detection = self.config.get(
+            "enable_community_detection", True
+        )
+
         # Initialize state
         self.state.set_context_format(self.context_format)
         self.state.set_confidence_threshold(self.confidence_threshold)
@@ -96,43 +103,42 @@ class CogitoAgent(ReactAgent):
     def process_query(self, query: str) -> str:
         """
         Process a user query through the Cogito loop.
-
-        Single entry point for all queries.
-        Automatically falls back to ReAct for simple queries.
+        Decouples LEARNING (updating the graph) from ANSWERING (using tools/graph).
         """
         logger.info(f"[{self._CLSNAME}] Processing: {query[:100]}...")
 
-        # Step 1: COMPREHEND (Unified)
+        # Step 1: COMPREHEND
         comprehension = self._comprehend(query)
 
-        # Fallback to ReAct for simple queries
+        # Step 2: LEARN (Always attempt to learn if new info is present)
+        # This prevents amnesia. Even if the answer path is REACT, we must capture new knowledge.
+        delta = KnowledgeDelta.empty()
+        if comprehension.entities or comprehension.relations:
+            logger.info(
+                f"[{self._CLSNAME}] Entities/Relations detected. Initiating memory consolidation."
+            )
+            current_context = self._retrieve(query, comprehension.entities)
+            delta = self._consolidate(comprehension, current_context)
+            if delta.has_changes:
+                self._update_memory(delta)
+
+        # Step 3: RETRIEVE (For answering)
+        answer_context = self._retrieve(query, comprehension.entities)
+
+        # Step 4: ANSWER
         if comprehension.is_react():
-            logger.info(f"[{self._CLSNAME}] Falling back to ReAct")
             self.current_mode = "REACT"
-            return super().process_query(query)
-
-        self.current_mode = "COGITO"
-
-        # Step 2: RETRIEVE (Graph-First)
-        context = self._retrieve(comprehension.entities)
-
-        # Step 3: CONSOLIDATE (Delta)
-        delta = self._consolidate(comprehension, context)
-
-        # Step 4: REASON (Graph-Augmented)
-        reasoning = self._cogito_reason(query, context, delta)
-
-        # Step 5: UPDATE (Automatic)
-        if delta.has_changes:
-            self._update_memory(delta)
-
-        # Step 6: RESPOND (Synthesized)
-        response = self._respond(reasoning, context)
-
-        # Record history
-        self.state.add_message("assistant", response)
-
-        return response
+            # CRITICAL FIX: Inject context into the query for the ReAct agent to prevent amnesia
+            augmented_query = (
+                f"SYMBOLIC MEMORY CONTEXT:\n{answer_context}\n\nUSER QUERY: {query}"
+            )
+            return super().process_query(augmented_query)
+        else:
+            self.current_mode = "COGITO"
+            reasoning = self._cogito_reason(query, answer_context, delta)
+            response = self._respond(reasoning, answer_context)
+            self.state.add_message("assistant", response)
+            return response
 
     # Step 1: COMPREHEND (Unified)
     def _comprehend(self, query: str) -> ComprehensionResult:
@@ -152,36 +158,32 @@ class CogitoAgent(ReactAgent):
                 return ComprehensionResult.fallback(query)
 
             # Convert schema result to internal Entity/Relation objects
-            entities = []
-            for e in result.entities:
-                entities.append(
-                    Entity(
-                        id=e.id,
-                        label=e.label,
-                        type=e.type,
-                        metadata=e.metadata,
-                        confidence=Confidence(
-                            score=e.confidence,
-                            source="llm_comprehension",
-                        ),
-                    )
+            entities = [
+                Entity(
+                    id=e.id,
+                    label=e.label,
+                    type=e.type,
+                    metadata=e.metadata,
+                    confidence=Confidence(
+                        score=e.confidence, source="llm_comprehension"
+                    ),
                 )
+                for e in result.entities
+            ]
 
-            relations = []
-            for r in result.relations:
-                relations.append(
-                    Relation(
-                        source=r.source,
-                        target=r.target,
-                        label=r.label,
-                        direction=r.direction,
-                        weight=r.weight,
-                        confidence=Confidence(
-                            score=r.confidence,
-                            source="llm_comprehension",
-                        ),
-                    )
+            relations = [
+                Relation(
+                    source=r.source,
+                    target=r.target,
+                    label=r.label,
+                    direction=r.direction,
+                    weight=r.weight,
+                    confidence=Confidence(
+                        score=r.confidence, source="llm_comprehension"
+                    ),
                 )
+                for r in result.relations
+            ]
 
             # Graph-Aware Override: Check if the query references entities in the graph
             path = result.modus_operandi
@@ -199,7 +201,11 @@ class CogitoAgent(ReactAgent):
                 for entity in entities:
                     self.state.add_session_entity(entity.id)
 
-            return ComprehensionResult(
+            logger.info(
+                f"[CogitoAgent:_comprehend] ComprehensionResult:\n{result.model_dump()}\n---"
+            )
+
+            result = ComprehensionResult(
                 reconstructed_query=result.reconstructed_query,
                 intent=result.user_intent,
                 path=path,
@@ -212,6 +218,8 @@ class CogitoAgent(ReactAgent):
                 ),
             )
 
+            return result
+
         except Exception as e:
             logger.error(f"Comprehension failed: {e}")
             return ComprehensionResult.fallback(query)
@@ -220,84 +228,159 @@ class CogitoAgent(ReactAgent):
         self, entities: list[Entity], relations: list[Relation]
     ) -> bool:
         """Check if the graph contains information relevant to the query."""
-        for entity in entities:
-            if entity and entity.id:
-                if self.memory.has_node(entity.id):
-                    return True
+        if not self.memory:
+            return False
 
-        for relation in relations:
-            if relation:
-                if relation.source and self.memory.has_node(relation.source):
-                    return True
-                if relation.target and self.memory.has_node(relation.target):
-                    return True
+        if any(
+            entity.id and self.memory.has_node(entity.id)
+            for entity in entities
+            if entity
+        ):
+            return True
 
-        return False
+        return any(
+            (relation.source and self.memory.has_node(relation.source))
+            or (relation.target and self.memory.has_node(relation.target))
+            for relation in relations
+            if relation
+        )
 
     # Step 2: RETRIEVE (Graph-First)
-    def _retrieve(self, entities: list[Entity]) -> str:
-        """Retrieve graph context optimized for LLM consumption."""
+    def _retrieve(self, query: str, entities: list[Entity]) -> str:
+        """
+        Retrieve graph context optimized for LLM consumption.
+
+        Multi-strategy approach:
+        1. Path Discovery (2+ entities) → Exact relationship path
+        2. Confidence-Filtered Subgraph (1 entity) → Targeted extraction
+        3. Community Discovery (large graphs) → Structural context
+        4. Relevance Ranking (medium graphs) → Query-aware context
+        5. Linearized Summary (large graphs, fallback) → Token-efficient
+        """
         node_count = len(self.memory.get_nodes())
 
         if node_count == 0:
             return "The memory graph is empty. No previous knowledge available."
 
+        valid_entities = [e for e in entities if e.id and self.memory.has_node(e.id)]
+
+        # Strategy 1: Hyper-Focused Relationship Path (if 2+ entities are detected)
+        if len(valid_entities) >= 2:
+            logger.info(f"[{self._CLSNAME}] Strategy: Path Discovery")
+
+            filtered_graph = get_confidence_filtered_subgraph(
+                graph=self.memory,
+                center=valid_entities[0].id,
+                radius=self.subgraph_radius,
+                min_confidence=self.confidence_threshold,
+                min_weight=self.min_weight,
+            )
+
+            path_details = find_shortest_path_with_details(
+                graph=filtered_graph,
+                from_node=valid_entities[0].id,
+                to_node=valid_entities[1].id,
+            )
+
+            if path_details and len(path_details["path"]) > 1:
+                # Format the exact path explicitly for the LLM (massive token saver)
+                return self._format_path_for_llm(
+                    path_details, valid_entities[0], valid_entities[1]
+                )
+
+        # Strategy 2: Confidence-Filtered Subgraph (1+ entities)
+        if valid_entities:
+            primary_entity = valid_entities[0]
+            logger.info(
+                f"[{self._CLSNAME}] Strategy: Subgraph centered on: '{primary_entity.id}'"
+            )
+
+            filtered_graph = get_confidence_filtered_subgraph(
+                graph=self.memory,
+                center=primary_entity.id,
+                radius=self.subgraph_radius,
+                min_confidence=self.confidence_threshold,
+                min_weight=self.min_weight,
+            )
+
+            if len(filtered_graph.get_nodes()) > 1:
+                return GraphRepresentation.to_llm_context(
+                    graph=filtered_graph,
+                    format="subgraph",
+                    center_node=primary_entity.id,
+                    query=query,
+                    max_nodes=self.max_graph_nodes,
+                    max_edges=100,
+                    include_metadata=True,
+                    min_confidence=self.confidence_threshold,
+                    min_weight=self.min_weight,
+                )
+
+            logging.warning(
+                f"[{self._CLSNAME}] Filtered graph empty for '{primary_entity.id}', using raw graph"
+            )
+
+        # Strategy 3: Community Discovery (large graphs, no entities)
+        if node_count > 50 and not valid_entities and self.enable_community_detection:
+            logger.info(f"[{self._CLSNAME}] Strategy: Community Discovery")
+
+            communities = find_communities(self.memory, min_nodes=3)
+            if communities:
+                # Use the largest community as context
+                largest_community = communities[0]
+                # Get subgraph of the community
+                community_node_set = set(largest_community)
+                community_graph = subgraph_by_predicate(
+                    graph=self.memory,
+                    predicate=lambda n: n.get_id() in community_node_set,
+                    include_neighbors=False,
+                )
+
+                header = (
+                    f"## Graph Communities\n"
+                    f"Found {len(community_node_set)} communities.\n"
+                    f"Largest community: {len(largest_community)} nodes.\n\n"
+                )
+
+                return header + GraphRepresentation.to_llm_context(
+                    graph=community_graph,
+                    format="linearized",
+                    query=query,
+                    max_nodes=30,
+                    max_edges=50,
+                    include_metadata=True,
+                    min_confidence=self.confidence_threshold,
+                    min_weight=self.min_weight,
+                    max_tokens=self.max_tokens,
+                )
+
+        # Strategy 4: Relevance-Ranked Context (medium graphs)
         if node_count < self.max_graph_nodes:
+            logger.info(f"[{self._CLSNAME}] Strategy: Relevance Ranking")
+
             return GraphRepresentation.to_llm_context(
                 graph=self.memory,
-                format=self.context_format,
+                format="relevance",
+                query=query,
                 max_nodes=self.max_graph_nodes,
                 max_edges=100,
                 include_metadata=True,
+                min_confidence=self.confidence_threshold,
+                min_weight=self.min_weight,
             )
 
-        if entities:
-            entity_ids = [e.id for e in entities if e.id]
-            subgraph = self._extract_subgraph(entity_ids)
-            return GraphRepresentation.to_llm_context(
-                graph=subgraph,
-                format=self.context_format,
-                max_nodes=20,
-                max_edges=50,
-                include_metadata=True,
-            )
-
+        # Strategy 5: [Fallback] Linearized Summary (large graphs)
         return GraphRepresentation.to_llm_context(
             graph=self.memory,
             format="linearized",
+            query=query,
             max_nodes=20,
             max_edges=30,
             include_metadata=False,
+            min_confidence=self.confidence_threshold,
+            min_weight=self.min_weight,
+            max_tokens=self.max_tokens,
         )
-
-    def _extract_subgraph(self, entity_ids: list[str]) -> MemoryGraph:
-        """Extract a subgraph centered on the given entities."""
-        nodes = set()
-
-        for eid in entity_ids:
-            if self.memory.has_node(eid):
-                nodes.add(eid)
-                neighbors = self.memory.get_neighbors(eid)
-                for neighbor in neighbors[: self.max_edges_per_node]:
-                    nodes.add(neighbor.get_id())
-
-        subgraph = MemoryGraph({"type": "subgraph", "source": "retrieval"})
-
-        for nid in nodes:
-            if self.memory.has_node(nid):
-                subgraph.add_node(self.memory.get_node(nid))
-
-        for edge in self.memory.get_edges():
-            if edge.get_type() == EdgeType.SYMMETRIC:
-                conn = set(edge.get_connections())
-                if conn.issubset(nodes):
-                    subgraph.add_edge(edge)
-            else:
-                source, target = edge.get_connections()
-                if source in nodes and target in nodes:
-                    subgraph.add_edge(edge)
-
-        return subgraph
 
     # Step 3: CONSOLIDATE (Delta)
     def _consolidate(
@@ -316,26 +399,27 @@ class CogitoAgent(ReactAgent):
                 f"{len(primitives['relations'])} relations"
             )
 
-            messages = [
-                {
-                    "role": "user",
-                    "content": Prompts.consolidate(
-                        context=context,
-                        new_primitives=json.dumps(primitives, indent=2),
-                        query=comprehension.reconstructed_query,
-                    ),
-                }
-            ]
             result = self.llm.get_structured(
-                messages=messages,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": Prompts.consolidate(
+                            context=context,
+                            new_primitives=json.dumps(primitives, indent=2),
+                            query=comprehension.reconstructed_query,
+                        ),
+                    }
+                ],
                 model=ConsolidationSchema,
             )
 
             if result is None:
-                logger.warning("Consolidation returned None, using empty delta")
+                logger.warning(
+                    f"[{self._CLSNAME}] Consolidation returned None, using empty delta"
+                )
                 return KnowledgeDelta.empty()
 
-            # Convert schema nodes/edges to graph nodes/edges
+            # Convert schema nodes/edges to graph nodes/edges (using safe C++ from_json (*MJ* heeeheee!))
             delta = KnowledgeDelta(
                 new_nodes=[Node.from_json(n.model_dump()) for n in result.new_nodes],
                 new_edges=[Edge.from_json(e.model_dump()) for e in result.new_edges],
@@ -384,7 +468,6 @@ class CogitoAgent(ReactAgent):
                 f"[{self._CLSNAME}] Sending reason prompt to LLM (length: {len(prompt)})"
             )
 
-            # Reason step uses natural language, not structured output
             reasoning_text = self._llm_call(query=prompt)
 
             logger.info(
@@ -505,6 +588,40 @@ class CogitoAgent(ReactAgent):
         )
         self.memory.add_node(node)
 
+    def _format_path_for_llm(
+        self,
+        path_details: dict[str, Any],
+        from_entity: Entity,
+        to_entity: Entity,
+    ) -> str:
+        """
+        Format path details for LLM consumption in a token-efficient way.
+        """
+        if not path_details or len(path_details["path"]) < 2:
+            return ""
+
+        lines = [
+            "## Direct Relationship Path Found",
+            f"Between: '{from_entity.id}' and '{to_entity.id}'",
+            f"Length: {len(path_details['path']) - 1} hops",
+            "",
+            "### Nodes & Connections",
+        ]
+
+        for i, node in enumerate(path_details["nodes"]):
+            confidence = node.get_metadata().get("confidence", 1.0)
+            lines.append(
+                f"  {i + 1}. {node.get_label()} (confidence: {confidence:.2f})"
+            )
+
+            if i < len(path_details["edges"]):
+                edge = path_details["edges"][i]
+                lines.append(
+                    f"     └─ {edge.get_label()} → (weight: {edge.get_weight():.2f})"
+                )
+
+        return "\n".join(lines)
+
     def _extract_solution(self, text: str) -> str:
         """Extract solution from reasoning text."""
         if "Solution:" in text:
@@ -531,6 +648,7 @@ class CogitoAgent(ReactAgent):
     def _call_tools(self, gaps: list[str]) -> list[dict[str, Any]]:
         """Call tools to fill gaps."""
         results = []
+
         for gap in gaps:
             for tool_name, tool in self.tools.items():
                 if tool_name.lower() in gap.lower():

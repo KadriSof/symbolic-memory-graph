@@ -7,7 +7,7 @@ import re
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional, Callable, Type, TypeVar
+from typing import Any, Callable, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)

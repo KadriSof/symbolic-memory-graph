@@ -10,6 +10,28 @@
 
 ## Quick Start
 
+### Setup
+
+```
+# Full setup with tests
+./setup.sh --ctest --pytest
+
+# Clean rebuild with verbose output
+./setup.sh --clean --verbose --ctest --pytest
+
+# Run only C++ tests with filter
+./setup.sh --ctest --test-filter MemoryGraphTest.*
+
+# Run only Python tests
+./setup.sh --pytest
+
+# Fast rebuild (skip venv, run tests)
+./setup.sh --skip-venv --ctest --pytest
+
+# Just build (skip tests)
+./setup.sh --skip-tests
+```
+
 ### One-Command Setup
 
 ```bash
