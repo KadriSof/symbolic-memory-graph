@@ -28,6 +28,10 @@ class Prompts:
         - REACT is fast, cheap, and sufficient for most queries.
         - COGITO is powerful but expensive — use it ONLY when absolutely necessary.
 
+        **CRITICAL RULE: You MUST extract ALL new entities, characters, locations, 
+        or relations from the user's input into the 'entities' and 'relations' arrays, regardless of whether you choose REACT or COGITO.** 
+        Learning is mandatory if new information is provided.
+
         Original user query:
         ---
         {query}
@@ -118,13 +122,11 @@ class Prompts:
         {format_instructions}
 
         **CRITICAL INSTRUCTIONS:**
-        1. **new_nodes / new_edges**: ONLY include entities/relations that are TRULY new and not already present in the current knowledge.
-        2. **modified_nodes / modified_edges**: ONLY include existing entities/relations that need their metadata, labels, or weights updated based on the new information.
-        3. **gaps**: This MUST be a list of simple STRING questions representing missing information needed to fully answer the query. DO NOT output objects or dictionaries here.
-           - [X] CORRECT: "gaps": ["What is Yennefer's age?", "Who is Ciri's mother?"]
-           - [!] INCORRECT: "gaps": [{{"id": "yennefer", "type": "sorceress"}}]
-        4. **conflicts**: List any direct contradictions between current knowledge and new information.
-        5. Return ONLY valid JSON. Do not include markdown formatting or conversational text outside the JSON object.
+        1. **NO SELF-REFERENCES**: A relation's `source` and `target` MUST NOT be the same entity (e.g., source="prasus", target="prasus" is strictly forbidden).
+        2. **NO DUPLICATES**: Do not output the same relation multiple times. Consolidate into a single, unique relation.
+        3. **new_nodes / new_edges**: ONLY include entities/relations that are TRULY new.
+        4. **gaps**: MUST be a list of simple STRING questions. DO NOT output objects or dictionaries here.
+        5. Return ONLY valid JSON.
         """
 
     # Step 4: REASON

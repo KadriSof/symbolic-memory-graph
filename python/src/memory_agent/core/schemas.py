@@ -9,9 +9,14 @@ from typing import Any, Literal, Union, Type
 class NodeSchema(BaseModel):
     """Schema for graph node."""
 
-    id: str = Field(..., description="Node ID")
+    id: str = Field(..., description="Node ID (lowercase, underscore)")
     label: str = Field(..., description="Node label")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Node metadata")
+
+    @field_validator("id", "label")
+    @classmethod
+    def ensure_string(cls, v: Any) -> str:
+        return str(v)
 
 
 class EdgeSchema(BaseModel):
@@ -20,27 +25,37 @@ class EdgeSchema(BaseModel):
     id: str = Field(..., description="Edge ID")
     label: str = Field(..., description="Edge label")
     type: int = Field(..., description="Edge type (0=asymmetric, 1=symmetric)")
-    connectiosn: Union[list[str], dict[str, Any]] = Field(
+    connections: Union[list[str], dict[str, Any]] = Field(
         ..., description="Edge connections"
     )
     weight: float = Field(default=0.5, ge=0.0, le=1.0, description="Edge weight")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Edge metadata")
 
+    @field_validator("id", "label")
+    @classmethod
+    def ensure_string(cls, v: Any) -> str:
+        return str(v)
+
 
 class EntitySchema(BaseModel):
     """Schema for entity extraction."""
 
-    id: str = Field(..., description="Unique identifier for the entity")
-    label: str = Field(..., description="Human-readable label")
-    type: str | None = Field(
-        None, description="Entity type (person, place, concept, etc.)"
+    id: str = Field(
+        ..., description="Unique identifier for the entity (lowercase, underscores)"
     )
+    label: str = Field(..., description="Human-readable label")
+    type: str | None = Field(None, description="Entity type")
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="Additional metadata"
     )
     confidence: float = Field(
         default=0.5, ge=0.0, le=1.0, description="Confidence score"
     )
+
+    @field_validator("id", "label", "type")
+    @classmethod
+    def ensure_string(cls, v: Any) -> str:
+        return str(v)
 
 
 class RelationSchema(BaseModel):
@@ -57,14 +72,17 @@ class RelationSchema(BaseModel):
         default=0.5, ge=0.0, le=1.0, description="Confidence score"
     )
 
+    @field_validator("source", "target", "label")
+    @classmethod
+    def ensure_string(cls, v: Any) -> str:
+        return str(v)
+
 
 class ComprehensionSchema(BaseModel):
     """Schema for comprehension output."""
 
     reconstructed_query: str = Field(..., description="Rephrased user query")
-    user_intent: Literal["ask", "task", "clarify", "correct"] = Field(
-        ..., description="User intent"
-    )
+    user_intent: str = Field(..., description="User intent")
     modus_operandi: Literal["REACT", "COGITO"] = Field(
         ..., description="Agent operation mode"
     )
@@ -144,7 +162,7 @@ def get_llm_format_instructions(model: Type[BaseModel]) -> str:
         # Hanle nested objects:
         if prop_type == "array":
             items = prop_info.get("items", {})
-            item_type = items.get("types", "any")
+            item_type = items.get("type", "any")
             lines.append(
                 f' "{prop_name}": [{{ ... }}]  # {description} (array of {item_type}){required_marker}'
             )
