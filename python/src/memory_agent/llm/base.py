@@ -63,6 +63,11 @@ class BaseLLM(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def chat_stream(self, messages: Messages) -> str:
+        """Generate a chat stream."""
+        raise NotImplementedError
+
+    @abstractmethod
     def structured_output(
         self, messages: Messages, schema: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:

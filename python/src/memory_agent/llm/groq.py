@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Generator
 
 from dotenv import load_dotenv
 from groq import Groq as GroqClient
@@ -129,6 +129,51 @@ class GroqLLM(BaseLLM):
 
             self.logger.debug(f"Chat response: {len(content)} characters")
             return content
+
+        except Exception as e:
+            self.logger.error(f"Chat generation failed: {str(e)}")
+            raise
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    def chat_stream(self, messages: Messages, **kwargs: Any) -> Generator:
+        """
+        Generate a chat completion from messages.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+
+        Returns:
+            The assistant's response as a string
+
+        Raises:
+            Exception: On API errors
+        """
+        try:
+            self.logger.debug(f"Chat request: {len(messages)} messages")
+
+            params = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.config.temperature,
+                "max_completion_tokens": self.config.max_tokens,
+                "top_p": self.config.top_p,
+                "frequency_penalty": self.config.frequency_penalty,
+                "presence_penalty": self.config.presence_penalty,
+            }
+
+            if self.config.seed is not None:
+                params["seed"] = self.config.seed
+
+            params.update(kwargs)
+            params["stream"] = True
+
+            stream = self.client.chat.completions.create(**params)
+
+            for chunk in stream:
+                output = chunk.choices[0].delta.content
+                yield output
 
         except Exception as e:
             self.logger.error(f"Chat generation failed: {str(e)}")
