@@ -224,7 +224,7 @@ class BaseState:
         while minimizing memory footprint.
         """
         max_len = 2000
-        trucated_obs = (
+        truncated_obs = (
             observation
             if len(observation) <= max_len
             else f"{observation[:max_len]}... [truncated, {len(observation) - max_len} chars]"
@@ -234,7 +234,7 @@ class BaseState:
         entry = {
             "thought": thought,
             "action": action,
-            "observation": trucated_obs,
+            "observation": truncated_obs,
             "step": self.step_count,
             "tokens": obs_tokens,
             "timestamp": datetime.now().isoformat(),
@@ -281,8 +281,6 @@ class BaseState:
             maxlen=self.max_messages,
         )
 
-        self._requires_compression = False
-
     # Summary Management
     def requires_summarization(self) -> bool:
         """Check if state needs summarization."""
@@ -292,7 +290,6 @@ class BaseState:
         """Update the rolling summary."""
         self.summary = summary
         self.summary_token_count = token_count
-        self._requires_compression = False
 
     def get_context_summary(self) -> str:
         """Get the current summary for prompt injection."""
@@ -356,7 +353,6 @@ class BaseState:
         self.step_count = 0
         self.total_tokens = 0
         self.status = AgentStatus.IDLE
-        self._requires_compression = False
 
         if not keep_metadata:
             self.metadata.clear()
@@ -561,7 +557,7 @@ class BaseAgent(ABC):
                     raise
 
                 self.logger.warning(
-                    f"Failed after retyring {max_retries} times. Error:\n{e}\n---"
+                    f"Failed after retrying {max_retries} times. Error:\n{e}\n---"
                 )
                 last_error = str(e)
                 continue
@@ -599,7 +595,6 @@ class BaseAgent(ABC):
 
         Args:
             messages: List of messages
-            **kwargs: Additional LLM parameters
 
         Returns:
             LLM response
@@ -733,7 +728,6 @@ class BaseAgent(ABC):
                     "_agent_type": self.__class__.__name__,
                     "_execution_id": self._execution_id,
                     "_llm_call_count": self._llm_call_count,
-                    "_total_llm_tokens": self._total_llm_tokens,
                 }
             )
 
@@ -764,7 +758,6 @@ class BaseAgent(ABC):
             self._state = self._deserialize_state(state_dict)
             self._execution_id = state_dict.get("_execution_id", self._execution_id)
             self._llm_call_count = state_dict.get("_llm_call_count", 0)
-            self._total_llm_tokens = state_dict.get("_total_llm_tokens", 0)
 
             self.logger.info(f"State loaded from {path}")
 
