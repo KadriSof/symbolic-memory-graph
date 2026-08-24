@@ -787,13 +787,6 @@ class BaseAgent(ABC):
         pass
 
     # Utilities
-    @staticmethod
-    def _generate_execution_id() -> str:
-        """Generate unique execution ID."""
-        import uuid
-
-        return str(uuid.uuid4())[:8]
-
     def _validate_config(self) -> None:
         """Validate configuration values."""
         if self.config.get("max_steps", 0) <= 0:
