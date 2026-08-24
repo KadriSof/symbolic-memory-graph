@@ -56,7 +56,7 @@ class SymbolicMemory:
         metadata = metadata or {}
         metadata.setdefault("created_at", datetime.now().isoformat())
         metadata.setdefault("last_updated", datetime.now().isoformat())
-        metadata.setdefault("confidence", 1.0)
+        metadata.setdefault("confidence", 0.5)
 
         node = Node(concept_id, label, metadata)
         self.graph.add_node(node)
@@ -350,11 +350,45 @@ class SymbolicMemory:
         from memory_graph.core.traversal import bfs
 
         node_ids = bfs(self.graph, concept_id, max_depth)
-        # Remove the center node itself (first in BFS result)
+
+        # Remove center node
         if node_ids and node_ids[0] == concept_id:
             node_ids = node_ids[1:]
 
-        return [self.graph.get_node(nid) for nid in node_ids]
+        # For BFS, include incoming edges
+        # The C++ bfs handles both directions for symmetric edges,
+        # but for asymmetric edges, we need to manually add incoming neighbors
+        result = []
+        for nid in node_ids:
+            result.append(self.graph.get_node(nid))
+
+        # Add incoming neighbors (nodes that have this node as target)
+        incoming_neighbors = []
+        for edge in self.graph.get_edges():
+            if not edge.is_group_edge():
+                source, target = edge.get_connections()
+                if target == concept_id and source not in node_ids:
+                    incoming_neighbors.append(self.graph.get_node(source))
+
+        # Also add neighbors from group edges
+        for edge in self.graph.get_edges():
+            if edge.is_group_edge():
+                members = list(edge.get_connections())
+                if concept_id in members:
+                    for member in members:
+                        if member != concept_id and member not in node_ids:
+                            incoming_neighbors.append(self.graph.get_node(member))
+
+        # Combine and deduplicate
+        all_neighbors = result + incoming_neighbors
+        seen = set()
+        deduped = []
+        for node in all_neighbors:
+            if node.get_id() not in seen:
+                seen.add(node.get_id())
+                deduped.append(node)
+
+        return deduped
 
     # Query Operations
     def query(
@@ -417,16 +451,26 @@ class SymbolicMemory:
         Raises:
             ValueError: If from_id or to_id doesn't exist
         """
-        from memory_graph.core.traversal import (
-            find_shortest_path_with_details,
-        )
+        from memory_graph.core.traversal import find_shortest_path_with_details
 
-        if not self.graph.has_node(from_id):
-            raise ValueError(f"Source concept '{from_id}' does not exist")
-        if not self.graph.has_node(to_id):
-            raise ValueError(f"Target concept '{to_id}' does not exist")
+        if not self.graph.has_node(from_id) or not self.graph.has_node(to_id):
+            return None
 
-        return find_shortest_path_with_details(self.graph, from_id, to_id)
+        # Try original direction first
+        result = find_shortest_path_with_details(self.graph, from_id, to_id)
+        if result is not None:
+            return result
+
+        # If not found, try reverse direction (for undirected semantics)
+        result = find_shortest_path_with_details(self.graph, to_id, from_id)
+        if result is not None:
+            # Reverse the path
+            result["path"] = list(reversed(result["path"]))
+            result["nodes"] = list(reversed(result["nodes"]))
+            result["edges"] = list(reversed(result["edges"]))
+            return result
+
+        return None
 
     def get_all_concepts(self) -> list[Node]:
         """Get all concepts in the knowledge graph."""
