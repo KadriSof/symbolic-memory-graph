@@ -75,6 +75,10 @@ class SymbolicMemory:
             return None
         return self.graph.get_node(concept_id)
 
+    def has_concept(self, concept_id: str) -> bool:
+        """Check if a concept exists in the knowledge graph."""
+        return self.graph.has_node(concept_id)
+
     def update_concept(
         self,
         concept_id: str,
