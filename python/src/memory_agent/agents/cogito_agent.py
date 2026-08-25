@@ -1,741 +1,377 @@
 """
-Cogito Agent — Compact, Graph-Centric Reasoning Agent.
+Cogito Core Data Structures - Mecha-Class Agent Foundation
 
-Core Principles:
-1. Think through the graph, not just the prompt.
-2. One LLM call per step (optimized).
-3. Confidence is tracked for every piece of knowledge.
-4. Memory is intrinsic, not optional.
-5. Compact and maintainable.
-
-Flow: Comprehend → Retrieve → Consolidate → Reason → Update → Respond
+Defines the essential data structures for the Cogito Agent system.
+Implements a clean, type-safe, and robust workflow orchestration pattern.
 """
 
+from __future__ import annotations
+
+import time
 import json
-import logging
+
+from enum import Enum
+from collections import deque
 from datetime import datetime
-from typing import Any
+from dataclasses import dataclass, field
 
-from memory_graph import MemoryGraph, Node, Edge
-from memory_graph.core import GraphRepresentation
+from typing import Any, Callable, Literal
 
-from memory_agent.agents.react_agent import ReactAgent
-from memory_agent.llm.base import BaseLLM
-from memory_agent.tools import Tool
-
-# Import from core
-from memory_agent.core import (
-    CogitoState,
-    Entity,
-    Relation,
-    KnowledgeDelta,
-    Confidence,
-    ComprehensionResult,
-    ReasoningResult,
-    Prompts,
+from .react_agent import ReactState
+from ..core import WorkingMemory
+from memory_graph.core import (
+    MemoryGraph,
 )
 
-# Import Pydantic schemas
-from memory_agent.core.schemas import (
-    ComprehensionSchema,
-    ConsolidationSchema,
-)
 
-from memory_graph.core.traversal import (
-    find_shortest_path_with_details,
-    get_confidence_filtered_subgraph,
-    subgraph_by_predicate,
-    find_communities,
-)
+# ENUMS
+class NodeStatus(str, Enum):
+    """Status of a procedure node."""
 
-logger = logging.getLogger(__name__)
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
-class CogitoAgent(ReactAgent):
+class TransitionType(str, Enum):
+    """Type of workflow edge."""
+
+    SEQUENTIAL = "sequential"
+    CONDITIONAL = "conditional"
+
+
+class CogitoStatus(str, Enum):
+    """Cogito Agent status."""
+
+    IDLE = "idle"
+    COMPREHENDING = "comprehending"
+    RETRIEVING = "retrieving"
+    CONSOLIDATING = "consolidating"
+    REASONING = "reasoning"
+    CLARIFYING = "clarifying"
+    REPLYING = "replying"
+    ERROR = "error"
+
+
+# WORKFLOW GRAPH & PROCEDURES
+@dataclass
+class ProcedureNode:
     """
-    Compact Cogito Agent — Graph-Centric Reasoning.
+    A resusable procedure node combining static definition and runtime state.
+    """
 
-    Key Design Decisions:
-    - Single comprehension call per query (optimized).
-    - Graph-first retrieval with smart formatting.
-    - Knowledge delta for minimal updates.
-    - Confidence scoring for all knowledge.
-    - Automatic memory persistence.
-    - Uses generic structured output parser (no project coupling).
+    id: str
+    name: str
+    description: str
+    func: Callable[..., Any]
+    max_retries: int = 3
+    timeout: float = 30.0
+
+    # Runtime state
+    status: NodeStatus = NodeStatus.PENDING
+    result: Any = None
+    error: str | None = None
+    retry_count: int = 0
+    start_time: float | None = None
+    end_time: float | None = None
+
+    # Metrics
+    call_count: int = 0
+    total_time: float = 0.0
+    error_count: int = 0
+
+    def reset(self) -> None:
+        """Reset runtime state for a new execution."""
+        self.status = NodeStatus.PENDING
+        self.result = None
+        self.error = None
+        self.retry_count = 0
+        self.start_time = None
+        self.end_time = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize node definition and metrics."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "max_retries": self.max_retries,
+            "timeout": self.timeout,
+            "status": self.status.value,
+            "call_count": self.call_count,
+            "total_time": self.total_time,
+            "error_count": self.error_count,
+        }
+
+
+@dataclass
+class TransitionEdge:
+    """A directed edge in the workflow graph."""
+
+    source: str
+    target: str
+    edge_type: TransitionType = TransitionType.SEQUENTIAL
+    condition: Callable[[WorkingMemory], bool] | None = None
+
+    def evaluate_condition(self, working_memory: WorkingMemory) -> bool:
+        """Safely evaluate edge condition."""
+        if self.condition is None:
+            return True
+
+        try:
+            return self.condition(working_memory)
+        except Exception:
+            return False
+
+
+class WorkflowGraph:
+    """
+    Workflow Grap.
+    Manages procedure nodes and transitions with robust queue-based execution.
     """
 
     def __init__(
-        self,
-        llm: BaseLLM,
-        memory_graph: MemoryGraph | None = None,
-        tools: list[Tool] | None = None,
-        config: dict[str, Any] | None = None,
+        self, name: str = "default_workflow", max_iterations: int = 100
     ) -> None:
-        self._CLSNAME = self.__class__.__name__
-        super().__init__(llm, tools, config)
-
-        self.memory = memory_graph or MemoryGraph({"type": "cogito_agent"})
-        self.state = CogitoState()
-        self.current_mode = "REACT"
-        self.llm_calls = 0
-
-        # Configuration
-        self.confidence_threshold = self.config.get("confidence_threshold", 0.6)
-        self.context_format = self.config.get("context_format", "linearized")
-        self.max_graph_nodes = self.config.get("max_graph_nodes", 50)
-        self.max_edges_per_node = self.config.get("max_edges_per_node", 5)
-
-        # Traversal configuration
-        self.subgraph_radius = self.config.get("subgraph_radius", 2)
-        self.min_weight = self.config.get("min_weight", 0.0)
-        self.max_tokens = self.config.get("max_tokens", 4096)
-        self.enable_community_detection = self.config.get(
-            "enable_community_detection", True
-        )
-
-        # Initialize state
-        self.state.set_context_format(self.context_format)
-        self.state.set_confidence_threshold(self.confidence_threshold)
-
-        self._log_init()
-
-    # PUBLIC API
-    def process_query(self, query: str) -> str:
-        """
-        Process a user query through the Cogito loop.
-        Decouples LEARNING (updating the graph) from ANSWERING (using tools/graph).
-        """
-        logger.info(f"[{self._CLSNAME}] Processing: {query[:100]}...")
-
-        # Step 1: COMPREHEND
-        comprehension = self._comprehend(query)
-
-        # Step 2: LEARN (Always attempt to learn if new info is present)
-        # This prevents amnesia. Even if the answer path is REACT, we must capture new knowledge.
-        delta = KnowledgeDelta.empty()
-        if comprehension.entities or comprehension.relations:
-            logger.info(
-                f"[{self._CLSNAME}] Entities/Relations detected. Initiating memory consolidation."
-            )
-            current_context = self._retrieve(query, comprehension.entities)
-            delta = self._consolidate(comprehension, current_context)
-            if delta.has_changes:
-                self._update_memory(delta)
-
-        # Step 3: RETRIEVE (For answering)
-        answer_context = self._retrieve(query, comprehension.entities)
-
-        # Step 4: ANSWER
-        if comprehension.is_react():
-            self.current_mode = "REACT"
-            # CRITICAL FIX: Inject context into the query for the ReAct agent to prevent amnesia
-            augmented_query = (
-                f"SYMBOLIC MEMORY CONTEXT:\n{answer_context}\n\nUSER QUERY: {query}"
-            )
-            return super().process_query(augmented_query)
-        else:
-            self.current_mode = "COGITO"
-            reasoning = self._cogito_reason(query, answer_context, delta)
-            response = self._respond(reasoning, answer_context)
-            self.state.add_message("assistant", response)
-            return response
-
-    # Step 1: COMPREHEND (Unified)
-    def _comprehend(self, query: str) -> ComprehensionResult:
-        """
-        Unified comprehension: one LLM call for everything.
-        Uses the generic structured output parser with ComprehensionSchema.
-        """
-        try:
-            # Get structured output using the generic parser
-            result = self.llm.get_structured(
-                messages=[{"role": "user", "content": Prompts.comprehend(query)}],
-                model=ComprehensionSchema,
-            )
-
-            if result is None:
-                logger.warning("Comprehension returned None, using fallback")
-                return ComprehensionResult.fallback(query)
-
-            # Convert schema result to internal Entity/Relation objects
-            entities = [
-                Entity(
-                    id=e.id,
-                    label=e.label,
-                    type=e.type,
-                    metadata=e.metadata,
-                    confidence=Confidence(
-                        score=e.confidence, source="llm_comprehension"
-                    ),
-                )
-                for e in result.entities
-            ]
-
-            relations = [
-                Relation(
-                    source=r.source,
-                    target=r.target,
-                    label=r.label,
-                    direction=r.direction,
-                    weight=r.weight,
-                    confidence=Confidence(
-                        score=r.confidence, source="llm_comprehension"
-                    ),
-                )
-                for r in result.relations
-            ]
-
-            # Graph-Aware Override: Check if the query references entities in the graph
-            path = result.modus_operandi
-            graph_has_info = self._graph_has_info(entities, relations)
-
-            if graph_has_info and path == "REACT":
-                logger.info(f"[{self._CLSNAME}] Graph override: REACT -> COGITO")
-                path = "COGITO"
-
-            # Update state
-            if hasattr(self.state, "set_context"):
-                self.state.set_context(result.active_context)
-
-            if hasattr(self.state, "add_session_entity"):
-                for entity in entities:
-                    self.state.add_session_entity(entity.id)
-
-            logger.info(
-                f"[CogitoAgent:_comprehend] ComprehensionResult:\n{result.model_dump()}\n---"
-            )
-
-            result = ComprehensionResult(
-                reconstructed_query=result.reconstructed_query,
-                intent=result.user_intent,
-                path=path,
-                context=result.active_context,
-                entities=entities,
-                relations=relations,
-                confidence=Confidence(
-                    score=result.confidence,
-                    source="llm_comprehension",
-                ),
-            )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Comprehension failed: {e}")
-            return ComprehensionResult.fallback(query)
-
-    def _graph_has_info(
-        self, entities: list[Entity], relations: list[Relation]
-    ) -> bool:
-        """Check if the graph contains information relevant to the query."""
-        if not self.memory:
-            return False
-
-        if any(
-            entity.id and self.memory.has_node(entity.id)
-            for entity in entities
-            if entity
-        ):
-            return True
-
-        return any(
-            (relation.source and self.memory.has_node(relation.source))
-            or (relation.target and self.memory.has_node(relation.target))
-            for relation in relations
-            if relation
-        )
-
-    # Step 2: RETRIEVE (Graph-First)
-    def _retrieve(self, query: str, entities: list[Entity]) -> str:
-        """
-        Retrieve graph context optimized for LLM consumption.
-
-        Multi-strategy approach:
-        1. Path Discovery (2+ entities) → Exact relationship path
-        2. Confidence-Filtered Subgraph (1 entity) → Targeted extraction
-        3. Community Discovery (large graphs) → Structural context
-        4. Relevance Ranking (medium graphs) → Query-aware context
-        5. Linearized Summary (large graphs, fallback) → Token-efficient
-        """
-        node_count = len(self.memory.get_nodes())
-
-        if node_count == 0:
-            return "The memory graph is empty. No previous knowledge available."
-
-        valid_entities = [e for e in entities if e.id and self.memory.has_node(e.id)]
-
-        # Strategy 1: Hyper-Focused Relationship Path (if 2+ entities are detected)
-        if len(valid_entities) >= 2:
-            logger.info(f"[{self._CLSNAME}] Strategy: Path Discovery")
-
-            filtered_graph = get_confidence_filtered_subgraph(
-                graph=self.memory,
-                center=valid_entities[0].id,
-                radius=self.subgraph_radius,
-                min_confidence=self.confidence_threshold,
-                min_weight=self.min_weight,
-            )
-
-            path_details = find_shortest_path_with_details(
-                graph=filtered_graph,
-                from_node=valid_entities[0].id,
-                to_node=valid_entities[1].id,
-            )
-
-            if path_details and len(path_details["path"]) > 1:
-                # Format the exact path explicitly for the LLM (massive token saver)
-                return self._format_path_for_llm(
-                    path_details, valid_entities[0], valid_entities[1]
-                )
-
-        # Strategy 2: Confidence-Filtered Subgraph (1+ entities)
-        if valid_entities:
-            primary_entity = valid_entities[0]
-            logger.info(
-                f"[{self._CLSNAME}] Strategy: Subgraph centered on: '{primary_entity.id}'"
-            )
-
-            filtered_graph = get_confidence_filtered_subgraph(
-                graph=self.memory,
-                center=primary_entity.id,
-                radius=self.subgraph_radius,
-                min_confidence=self.confidence_threshold,
-                min_weight=self.min_weight,
-            )
-
-            if len(filtered_graph.get_nodes()) > 1:
-                return GraphRepresentation.to_llm_context(
-                    graph=filtered_graph,
-                    format="subgraph",
-                    center_node=primary_entity.id,
-                    query=query,
-                    max_nodes=self.max_graph_nodes,
-                    max_edges=100,
-                    include_metadata=True,
-                    min_confidence=self.confidence_threshold,
-                    min_weight=self.min_weight,
-                )
-
-            logging.warning(
-                f"[{self._CLSNAME}] Filtered graph empty for '{primary_entity.id}', using raw graph"
-            )
-
-        # Strategy 3: Community Discovery (large graphs, no entities)
-        if node_count > 50 and not valid_entities and self.enable_community_detection:
-            logger.info(f"[{self._CLSNAME}] Strategy: Community Discovery")
-
-            communities = find_communities(self.memory, min_nodes=3)
-            if communities:
-                # Use the largest community as context
-                largest_community = communities[0]
-                # Get subgraph of the community
-                community_node_set = set(largest_community)
-                community_graph = subgraph_by_predicate(
-                    graph=self.memory,
-                    predicate=lambda n: n.get_id() in community_node_set,
-                    include_neighbors=False,
-                )
-
-                header = (
-                    f"## Graph Communities\n"
-                    f"Found {len(community_node_set)} communities.\n"
-                    f"Largest community: {len(largest_community)} nodes.\n\n"
-                )
-
-                return header + GraphRepresentation.to_llm_context(
-                    graph=community_graph,
-                    format="linearized",
-                    query=query,
-                    max_nodes=30,
-                    max_edges=50,
-                    include_metadata=True,
-                    min_confidence=self.confidence_threshold,
-                    min_weight=self.min_weight,
-                    max_tokens=self.max_tokens,
-                )
-
-        # Strategy 4: Relevance-Ranked Context (medium graphs)
-        if node_count < self.max_graph_nodes:
-            logger.info(f"[{self._CLSNAME}] Strategy: Relevance Ranking")
-
-            return GraphRepresentation.to_llm_context(
-                graph=self.memory,
-                format="relevance",
-                query=query,
-                max_nodes=self.max_graph_nodes,
-                max_edges=100,
-                include_metadata=True,
-                min_confidence=self.confidence_threshold,
-                min_weight=self.min_weight,
-            )
-
-        # Strategy 5: [Fallback] Linearized Summary (large graphs)
-        return GraphRepresentation.to_llm_context(
-            graph=self.memory,
-            format="linearized",
-            query=query,
-            max_nodes=20,
-            max_edges=30,
-            include_metadata=False,
-            min_confidence=self.confidence_threshold,
-            min_weight=self.min_weight,
-            max_tokens=self.max_tokens,
-        )
-
-    # Step 3: CONSOLIDATE (Delta)
-    def _consolidate(
-        self, comprehension: ComprehensionResult, context: str
-    ) -> KnowledgeDelta:
-        """Consolidate new information into a knowledge delta."""
-        try:
-            # Prepare primitives for the LLM
-            primitives = {
-                "entities": [e.to_dict() for e in comprehension.entities],
-                "relations": [r.to_dict() for r in comprehension.relations],
-            }
-
-            logger.info(
-                f"[{self._CLSNAME}] Consolidating with {len(primitives['entities'])} entities, "
-                f"{len(primitives['relations'])} relations"
-            )
-
-            result = self.llm.get_structured(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": Prompts.consolidate(
-                            context=context,
-                            new_primitives=json.dumps(primitives, indent=2),
-                            query=comprehension.reconstructed_query,
-                        ),
-                    }
-                ],
-                model=ConsolidationSchema,
-            )
-
-            if result is None:
-                logger.warning(
-                    f"[{self._CLSNAME}] Consolidation returned None, using empty delta"
-                )
-                return KnowledgeDelta.empty()
-
-            # Convert schema nodes/edges to graph nodes/edges (using safe C++ from_json (*MJ* heeeheee!))
-            delta = KnowledgeDelta(
-                new_nodes=[Node.from_json(n.model_dump()) for n in result.new_nodes],
-                new_edges=[Edge.from_json(e.model_dump()) for e in result.new_edges],
-                modified_nodes=[
-                    Node.from_json(n.model_dump()) for n in result.modified_nodes
-                ],
-                modified_edges=[
-                    Edge.from_json(e.model_dump()) for e in result.modified_edges
-                ],
-                conflicts=result.conflicts,
-                gaps=result.gaps,
-                confidence=Confidence(
-                    score=result.confidence, source="llm_consolidation"
-                ),
-                source="llm_consolidation",
-            )
-
-            logger.info(f"[{self._CLSNAME}] Delta built successfully")
-            return delta
-
-        except Exception as e:
-            logger.error(f"Consolidation failed: {e}")
-            return KnowledgeDelta.empty()
-
-    # Step 4: REASON (Graph-Augmented)
-    def _cogito_reason(
-        self, query: str, context: str, delta: KnowledgeDelta
-    ) -> ReasoningResult:
-        """Reason using the consolidated graph context."""
-        try:
-            # Call tools to fill gaps if needed
-            tool_results = None
-            if delta.gaps and self.tools:
-                tool_results = self._call_tools(delta.gaps)
-
-            prompt = Prompts.reason(
-                query=query,
-                context=context,
-                gaps=json.dumps(delta.gaps, indent=2),
-                tool_results=(
-                    json.dumps(tool_results, indent=2) if tool_results else None
-                ),
-            )
-
-            logger.info(
-                f"[{self._CLSNAME}] Sending reason prompt to LLM (length: {len(prompt)})"
-            )
-
-            reasoning_text = self._llm_call(query=prompt)
-
-            logger.info(
-                f"[{self._CLSNAME}] Received reasoning response (length: {len(reasoning_text)})"
-            )
-
-            # Extract solution
-            solution = self._extract_solution(reasoning_text)
-
-            # Estimate confidence
-            confidence_score = self._estimate_confidence(reasoning_text)
-            confidence = Confidence(
-                score=confidence_score,
-                source="llm_reasoning",
-                explanation="Estimated from reasoning text",
-            )
-
-            return ReasoningResult(
-                reasoning_trace=reasoning_text,
-                solution=solution,
-                confidence=confidence,
-                tool_results=tool_results,
-            )
-
-        except Exception as e:
-            logger.error(f"Reasoning failed: {e}")
-            return ReasoningResult(
-                reasoning_trace="",
-                solution="I encountered an issue while reasoning. Could you rephrase your question?",
-                confidence=Confidence(score=0.3, source="error_fallback"),
-            )
-
-    # Step 5: UPDATE (Automatic)
-    def _update_memory(self, delta: KnowledgeDelta) -> None:
-        """Update the memory graph with the knowledge delta."""
-        if delta.confidence.score < self.confidence_threshold:
-            logger.debug(
-                f"Skipping update: confidence {delta.confidence.score} < {self.confidence_threshold}"
-            )
-            return
-
-        logger.info(
-            f"[{self._CLSNAME}] Updating memory with {len(delta.new_nodes)} new nodes, "
-            f"{len(delta.new_edges)} new edges"
-        )
-
-        added_nodes = 0
-        added_edges = 0
-
-        # Add new nodes
-        for node in delta.new_nodes:
-            if not self.memory.has_node(node.get_id()):
-                try:
-                    self.memory.add_node(node)
-                    added_nodes += 1
-                except Exception as e:
-                    logger.error(f"Failed to add node {node.get_id()}: {e}")
-
-        # Add new edges
-        for edge in delta.new_edges:
-            if not self.memory.has_edge(edge.get_id()):
-                try:
-                    self.memory.add_edge(edge)
-                    added_edges += 1
-                except Exception as e:
-                    logger.error(f"Failed to add edge {edge.get_id()}: {e}")
-
-        # Update modified nodes
-        for node in delta.modified_nodes:
-            if self.memory.has_node(node.get_id()):
-                existing = self.memory.get_node(node.get_id())
-                if node.get_label() != existing.get_label():
-                    existing.set_label(node.get_label())
-                for key, value in node.get_metadata().items():
-                    existing.update_metadata(key, value)
-
-        # Store conflicts
-        for conflict in delta.conflicts:
-            self._store_conflict(conflict)
-
-        # Record snapshot
-        if hasattr(self.state, "add_graph_snapshot"):
-            self.state.add_graph_snapshot(
-                len(self.memory.get_nodes()),
-                len(self.memory.get_edges()),
-            )
-
-        logger.info(
-            f"[{self._CLSNAME}] Memory updated: +{added_nodes} nodes, +{added_edges} edges"
-        )
-
-    # Step 6: RESPOND (Synthesized)
-    def _respond(self, reasoning: ReasoningResult, context: str) -> str:
-        """Synthesize a response from the reasoning result."""
-        try:
-            prompt = Prompts.synthesize_response(
-                reasoning=reasoning.reasoning_trace[:1000],
-                solution=reasoning.solution,
-                confidence=reasoning.confidence.score,
-                graph_context=context[:1000],
-            )
-            return self._llm_call(query=prompt)
-        except Exception as e:
-            logger.error(f"Response synthesis failed: {e}")
-            return reasoning.solution
-
-    # HELPERS
-    def _store_conflict(self, conflict: dict[str, Any]) -> None:
-        """Store a conflict in the graph for later resolution."""
-        node = Node(
-            id=f"conflict_{datetime.now().timestamp()}",
-            label="Conflict",
-            metadata={
-                "type": "conflict",
-                "data": conflict,
-                "timestamp": datetime.now().isoformat(),
-            },
-        )
-        self.memory.add_node(node)
-
-    def _format_path_for_llm(
+        self.name = name
+        self.nodes: dict[str, ProcedureNode] = {}
+        self.edges: list[TransitionEdge] = []
+        self.entry_nodes: list[str] = []
+        self.max_iterations = max_iterations
+
+    def add_node(self, node: ProcedureNode) -> ProcedureNode:
+        """Register a procedure node."""
+        self.nodes[node.id] = node
+        if not self.entry_nodes:
+            self.entry_nodes.append(node.id)
+
+        return node
+
+    def add_edge(
         self,
-        path_details: dict[str, Any],
-        from_entity: Entity,
-        to_entity: Entity,
-    ) -> str:
-        """
-        Format path details for LLM consumption in a token-efficient way.
-        """
-        if not path_details or len(path_details["path"]) < 2:
-            return ""
-
-        lines = [
-            "## Direct Relationship Path Found",
-            f"Between: '{from_entity.id}' and '{to_entity.id}'",
-            f"Length: {len(path_details['path']) - 1} hops",
-            "",
-            "### Nodes & Connections",
-        ]
-
-        for i, node in enumerate(path_details["nodes"]):
-            confidence = node.get_metadata().get("confidence", 1.0)
-            lines.append(
-                f"  {i + 1}. {node.get_label()} (confidence: {confidence:.2f})"
+        source: str,
+        target: str,
+        edge_type: TransitionType = TransitionType.SEQUENTIAL,
+        condition: Callable[[WorkingMemory], bool] | None = None,
+    ) -> None:
+        """Add a directed edge between nodes."""
+        if source not in self.nodes or target not in self.nodes:
+            raise ValueError(
+                f"Edge reference unknown, Source: '{source}', Target: '{target}'"
             )
+        self.edges.append(TransitionEdge(source, target, edge_type, condition))
 
-            if i < len(path_details["edges"]):
-                edge = path_details["edges"][i]
-                lines.append(
-                    f"     └─ {edge.get_label()} → (weight: {edge.get_weight():.2f})"
+    def run(
+        self,
+        start_node: str,
+        working_memory: WorkingMemory,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute the workflow using a robust, queue-based traversal."""
+        context = context or {}
+        completed = set()
+        ready_queue = deque([start_node])
+        results = {}
+        iterations = 0
+
+        # Reset all nodes for fresh execution
+        for node in self.nodes.values():
+            node.reset()
+
+        while ready_queue and iterations < self.max_iterations:
+            iterations += 1
+            node_id = ready_queue.popleft()
+
+            if node_id in completed:
+                continue
+
+            node = self.nodes[node.id]
+            node.status = NodeStatus.RUNNING
+            node.start_time = time.perf_counter()
+
+            try:
+                # Execute the prrocedure
+                result = node.func(working_memory, context)
+
+                if not working_memory.goal:
+                    print(f"Node '{node_id}' cleared working_memory.goal")
+
+                working_memory.step_times[node_id] = (
+                    time.perf_counter() - node.start_time
                 )
 
-        return "\n".join(lines)
+                node.result = result
+                node.status = NodeStatus.COMPLETED
+                node.call_count += 1
+                node.total_time += time.perf_counter() - node.start_time
+                completed.add(node_id)
+                results[node_id] = result
 
-    def _extract_solution(self, text: str) -> str:
-        """Extract solution from reasoning text."""
-        if "Solution:" in text:
-            parts = text.split("Solution:", 1)
-            return parts[1].strip() if len(parts) > 1 else text
-        return text
+                # Enqueue next nodes based on outgoing edges
+                for edge in self.edges:
+                    if edge.source == node_id:
+                        if edge.edge_type == TransitionType.CONDITIONAL:
+                            if edge.evaluate_condition(working_memory):
+                                ready_queue.append(edge.target)
+                        else:
+                            ready_queue.append(edge.target)
 
-    def _estimate_confidence(self, text: str) -> float:
-        """Estimate confidence from reasoning text."""
-        uncertainty_markers = [
-            "not sure",
-            "I think",
-            "maybe",
-            "possibly",
-            "could be",
-            "might",
-            "uncertain",
-            "guess",
-        ]
-        uncertainty_count = sum(1 for m in uncertainty_markers if m in text.lower())
-        confidence = max(0.3, 0.9 - (uncertainty_count * 0.1))
-        return min(1.0, confidence)
+            except Exception as e:
+                node.error = str(e)
+                node.error_count += 1
+                node.retry_count += 1
+                node.end_time = time.time()
 
-    def _call_tools(self, gaps: list[str]) -> list[dict[str, Any]]:
-        """Call tools to fill gaps."""
-        results = []
+                if node.retry_count < node.max_retries:
+                    node.status = NodeStatus.PENDING
+                    backoff = 2 ** (node.retry_count - 1)
+                    time.sleep(backoff)
+                    ready_queue.append(node_id)  # Retry
+                else:
+                    node.status = NodeStatus.FAILED
+                    raise RuntimeError(
+                        f"Node '{node_id}' failed after {node.max_retries} retries: {e}"
+                    )
+            else:
+                node.end_time = time.time()
 
-        for gap in gaps:
-            for tool_name, tool in self.tools.items():
-                if tool_name.lower() in gap.lower():
-                    try:
-                        result = tool.execute(gap=gap)
-                        results.append(
-                            {
-                                "tool": tool_name,
-                                "gap": gap,
-                                "result": result,
-                                "success": True,
-                            }
-                        )
-                        break
-                    except Exception as e:
-                        results.append(
-                            {
-                                "tool": tool_name,
-                                "gap": gap,
-                                "error": str(e),
-                                "success": False,
-                            }
-                        )
+        if iterations >= self.max_iterations:
+            raise RuntimeError(
+                f"Workflow exceeded maximum safe iterations ({self.max_iterations})"
+            )
+
         return results
 
-    # LLM Helpers
-    def _llm_call(
-        self,
-        messages: list[dict[str, str]] | None = None,
-        query: str | None = None,
-    ) -> str:
-        """Call the LLM with either messages or a query string."""
-        if messages is not None:
-            msgs = messages
-        elif query is not None:
-            msgs = [
+
+class Orchestrator:
+    """
+    The Nervous System - Coordinates the workflow graph and state transitions.
+    """
+
+    def __init__(self, workflow: WorkflowGraph, max_history: int = 50):
+        self.workflow = workflow
+        self.state: CogitoStatus = CogitoStatus.IDLE
+        self.working_memory = WorkingMemory()
+        # deque to prevent unbounded memory growth
+        self.execution_history: deque[dict[str, Any]] = deque(maxlen=max_history)
+
+    def process(self, query: str, context: dict[str, Any] | None = None) -> str:
+        """
+        Process a query through the workflow.
+        """
+        context = context or {}
+        self.state = CogitoStatus.COMPREHENDING
+        self.working_memory.reset()
+        self.working_memory.goal = query
+        self.working_memory.start_time = time.time()
+
+        try:
+            if self.workflow.entry_nodes:
+                start_node = self.workflow.entry_nodes[0]
+            else:
+                start_node = next(iter(self.workflow.nodes))
+
+            results = self.workflow.run(
+                start_node=start_node,
+                working_memory=self.working_memory,
+                context=context,
+            )
+
+            final_answer = (
+                self.working_memory.final_answer
+                or "I was unable to generate a response."
+            )
+            self.state = CogitoStatus.IDLE
+
+            self.execution_history.append(
                 {
-                    "role": "system",
-                    "content": "You are the Cogito Agent, a reasoning agent with symbolic memory.",
-                },
-                {"role": "user", "content": query},
-            ]
-        else:
-            raise ValueError("Either 'messages' or 'query' must be provided")
+                    "query": query,
+                    "timestamp": datetime.now().isoformat(),
+                    "duration": time.time() - self.working_memory.start_time,
+                    "final_answer": final_answer,
+                }
+            )
 
-        if not msgs or not isinstance(msgs, list):
-            raise ValueError(f"Invalid messages: {msgs}")
+            return final_answer
 
-        response = self.llm.chat(messages=msgs)
-        self.llm_calls += 1
-        return response
+        except Exception as e:
+            self.state = CogitoStatus.ERROR
+            raise
 
-    # SERIALIZATION
-    def save_memory(self, filepath: str) -> None:
-        """Save memory graph to file."""
-        with open(filepath, "w") as f:
-            json.dump(self.memory.to_json(), f, indent=2)
-        logger.info(f"[{self._CLSNAME}] Memory saved to {filepath}")
+    def get_state(self) -> dict[str, Any]:
+        """Get current orchestrator state snapshot."""
+        return {
+            "state": self.state.value,
+            "working_memory": self.working_memory.to_dict(),
+            "node_count": len(self.workflow.nodes),
+            "execution_count": len(self.execution_history),
+        }
 
-    def load_memory(self, filepath: str) -> None:
-        """Load memory graph from file."""
-        with open(filepath, "r") as f:
-            data = json.load(f)
-            self.memory = MemoryGraph.from_json(data)
-        logger.info(f"[{self._CLSNAME}] Memory loaded from {filepath}")
 
-    def save_state(self, filepath: str) -> None:
-        """Save agent state to file."""
-        with open(filepath, "w") as f:
-            json.dump(self.state.to_dict(), f, indent=2)
-        logger.info(f"[{self._CLSNAME}] State saved to {filepath}")
+# COGITO STATE
+class CogitoState(ReactState):
+    """
+    Cogito-specific state extending ReactState.
+    Manages WorkingMemory and efficient C++ Graph persistence.
+    """
 
-    def load_state(self, filepath: str) -> None:
-        """Load agent state from file."""
-        with open(filepath, "r") as f:
-            data = json.load(f)
-            self.state = CogitoState.from_dict(data)
-        logger.info(f"[{self._CLSNAME}] State loaded from {filepath}")
+    def __init__(self):
+        super().__init__()
 
-    # LOGGING
-    def _log_init(self) -> None:
-        """Log initialization details."""
-        logger.info(f"[{self._CLSNAME}] Initialized")
-        logger.info(
-            f"  Memory: {len(self.memory.get_nodes())} nodes, "
-            f"{len(self.memory.get_edges())} edges"
+        self.working_memory: WorkingMemory = field(default_factory=WorkingMemory)
+        self.symbolic_memory: MemoryGraph | None = None  # Knowledge Memory
+        self.episodic_memory: MemoryGraph | None = None  # Persistence Memory
+
+        self.graph_snapshot_b64: str = ""
+        self.graph_version: int = 0
+
+        self.current_mode: Literal["COGITO", "REACT"] = "COGITO"
+        self.graph_ops: int = 0
+        self.confidence_threshold: float = 0.7
+
+    def reset(self, keep_metadata: bool = False) -> None:
+        """Reset state and working memory, preserving graph if requested"""
+        super().reset(keep_metadata=keep_metadata)
+        self.working_memory.reset()
+        if not keep_metadata:
+            self.graph_snapshot_b64 = ""
+            self.graph_version = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize state, safely handling the C++ graph via binary encoding."""
+        base_dict = super().to_dict()
+        base_dict.update(
+            {
+                "working_memory": self.working_memory.to_dict(),
+                "current_mode": self.current_mode,
+                "graph_snapshot_b64": self.graph_snapshot_b64,
+                "graph_version": self.graph_version,
+            }
         )
-        logger.info(f"  Confidence threshold: {self.confidence_threshold}")
-        logger.info(f"  Context format: {self.context_format}")
-        logger.info(f"  Tools: {list(self.tools.keys()) if self.tools else 'None'}")
+        return base_dict
+
+    # @classmethod
+    # def from_dict(cls, data: dict[str, Any]) -> "CogitoState":
+    #     """Deserialize state."""
+    #     state = super().from_dict(data)
+    #     # ISSUE: . Cannot assign to attribute "working_memory", "graph_snapshot_b64", "graph_version"
+    #     # for class "ReactState" Attribute "working_memory" is unknown [reportAttributeAccessIssue]
+    #     state.working_memory = WorkingMemory.from_dict(data.get("working_memory", {}))
+    #     state.graph_snapshot_b64 = data.get("graph_snapshot_b64", "")
+    #     state.graph_version = data.get("graph_version", 0)
+    #     # ISSUE: Diagnostics:1. Type "ReactState" is not assignable to return type "CogitoState"
+    #     # "ReactState" is not assignable to "CogitoState" [reportReturnType]
+    #     return state
+
+    def save_graph_state(
+        self, graph: "MemoryGraph", previous_graph: "MemoryGraph | None" = None
+    ) -> None:
+        """
+        Efficiently save graph state using delta compression if possible.
+        Falls back to full binary serialization for the first snapshot.
+        """
+
+
+class CogitoAgent: ...
