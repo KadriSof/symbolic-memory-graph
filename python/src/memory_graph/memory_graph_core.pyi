@@ -158,7 +158,7 @@ def to_binary(graph: MemoryGraph, options: SerializationOptions = ...) -> bytes:
     """Serialize a MemoryGraph to binary format."""
     ...
 
-def from_binary(data: bytes) -> MemoryGraph:
+def from_binary(data: Union[bytes, Sequence[int]]) -> MemoryGraph:
     """Deserialize a MemoryGraph from binary format."""
     ...
 
