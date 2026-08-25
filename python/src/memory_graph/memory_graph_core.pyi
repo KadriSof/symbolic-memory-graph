@@ -1,7 +1,7 @@
 # Type stubs for the compiled C++ module memory_graph_core
 # Generated automatically - do not edit manually
 
-from typing import Any, Dict, List, Set, Tuple, Union, Callable
+from typing import Any, Dict, List, Sequence, Set, Tuple, Union, Callable
 
 class EdgeType:
     SYMMETRIC: int
@@ -186,6 +186,6 @@ def get_version(data: bytes) -> int:
     """Get the serialization version from binary data."""
     ...
 
-def is_valid_format(data: bytes) -> bool:
+def is_valid_format(data: Union[bytes, Sequence[int]]) -> bool:
     """Check if binary data is valid for this version."""
     ...
