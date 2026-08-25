@@ -1,10 +1,20 @@
-from datetime import datetime
+import uuid
+import base64
+import logging
 
 from typing import Any
+from datetime import datetime
 
 from memory_graph.core import MemoryGraph, Node, Edge, EdgeType
+from memory_graph.core.traversal import (
+    find_nodes_by_label,
+    find_nodes_by_metadata,
+    subgraph_by_predicate,
+)
+from memory_graph.core.serialization import GraphSerializer
 
 
+# SYMBOLIC MEMORY
 class SymbolicMemory:
     """
     Long-Term Memory (Knowledge Graph) for the Cogito Agent.
@@ -574,3 +584,319 @@ class SymbolicMemory:
             f"SymbolicMemory(nodes={len(self.graph.get_nodes())}, "
             f"edges={len(self.graph.get_edges())})"
         )
+
+
+# EPSISODIC MEMORY
+class EpisodicMemory:
+    """
+    Episodic Memory as a DAG over C++ MemoryGraph.
+
+    Stores conversation turns as nodes with PRECEDES edges for history
+    and REFERENCES edges to symbolic concepts. Enables branching,
+    cross-memory grounding, and efficient binary serialization.
+
+    Example:
+        >>> memory = EpisodicMemory()
+        >>> turn1 = memory.add_turn("user", "Who is Geralt?")
+        >>> turn2 = memory.add_turn("assistant", "A witcher.")
+        >>> memory.link_to_concept(turn2, "geralt", "REFERENCES")
+        >>> turns = memory.get_recent_turns(5)
+        >>> referenced = memory.get_turns_referencing("geralt")
+    """
+
+    def __init__(self, graph: MemoryGraph | None = None) -> None:
+        """Initialize episodic memory with optional existing graph."""
+        self.graph = graph or MemoryGraph({"type": "episodic_memory"})
+        self._current_turn_id: str | None = None
+        self._turn_order: list[str] = []
+        self._turn_count: int = 0
+
+        self.logger = logging.getLogger(name="[EpisodicMemory]")
+
+        if graph is not None:
+            self._rebuild_order()
+
+    # Core Operations
+    def add_turn(
+        self,
+        role: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+        turn_id: str | None = None,
+    ) -> str:
+        """
+        Add a new turn to the episodic DAG.
+
+        Args:
+            role: "user", "assistant", "system", or "tool"
+            content: Message content
+            metadata: Additional metadata (tool_name, confidence, etc.)
+            turn_id: Optional custom ID (auto-generated)
+
+        Returns:
+            The ID of the created turn.
+
+        Raises:
+            ValueError: If role is invalid.
+        """
+        valid_roles = {"user", "assistant", "system", "tool"}
+
+        if role not in valid_roles:
+            raise ValueError(f"Invalid role '{role}'. Must be one of: {valid_roles}")
+
+        turn_id = turn_id or f"turn_{uuid.uuid4().hex[:8]}"
+        if self.graph.has_node(turn_id):
+            raise ValueError(f"Turn '{turn_id}' already exists")
+
+        timestamp = datetime.now().isoformat()
+
+        node_metadata = {
+            "role": role,
+            "content": content,
+            "timestamp": timestamp,
+            # TODO: I already have a token count func in base.py
+            # let's place it in 'utils' and use it here.
+            "tokens": len(content) // 4,
+            **(metadata or {}),
+        }
+
+        node = Node(turn_id, "EpisodicTurn", node_metadata)
+        self.graph.add_node(node)
+
+        # DAG seq linking to previous turn
+        if self._current_turn_id:
+            edge_id = f"edge_{self._current_turn_id}_{turn_id}"
+            if not self.graph.has_edge(edge_id):
+                edge = Edge(
+                    edge_id,
+                    "PRECEDES",
+                    EdgeType.ASYMMETRIC,
+                    (self._current_turn_id, turn_id),
+                    1.0,
+                )
+                self.graph.add_edge(edge)
+
+        self._current_turn_id = turn_id
+        self._turn_order.append(turn_id)
+        self._turn_count += 1
+
+        self.logger.debug(f"Added turn {turn_id} ({role})")
+        return turn_id
+
+    def get_turn(self, turn_id: str) -> Node | None:
+        """Retrieve a turn by its ID."""
+        if self.graph.has_node(turn_id):
+            return self.graph.get_node(turn_id)
+        return None
+
+    def get_recent_turns(self, count: int = 10) -> list[Node]:
+        """Get the most recent N turns."""
+        if count <= 0:
+            return []
+
+        recent_ids = self._turn_order[-count:] if self._turn_order else []
+        return [
+            self.graph.get_node(tid) for tid in recent_ids if self.graph.has_node(tid)
+        ]
+
+    def get_turns_by_role(self, role: str) -> list[Node]:
+        """Get all turns with a specific role."""
+        node_ids = find_nodes_by_metadata(self.graph, "role", role)
+        return [self.graph.get_node(nid) for nid in node_ids]
+
+    def get_turns_since(self, timestamp: str) -> list[Node]:
+        """Get all turns after a given timestamp."""
+        result = []
+        for tid in self._turn_order:
+            node = self.graph.get_node(tid)
+            ts = node.get_metadata().get("timestamp", "")
+            if ts > timestamp:
+                result.append(node)
+
+        result.sort(key=lambda n: n.get_metadata().get("timestamp", ""))
+        return result
+
+    def get_turns_between(self, start_time: str, end_time: str) -> list[Node]:
+        """Get all turns between two timestamps."""
+        result = []
+        for tid in self._turn_order:
+            node = self.graph.get_node(tid)
+            ts = node.get_metadata().get("timestamp", "")
+            if start_time < ts < end_time:
+                result.append(node)
+        result.sort(key=lambda n: n.get_metadata().get("timestamp", ""))
+        return result
+
+    # Cross-Memory Grounding
+    def link_to_concept(
+        self,
+        turn_id: str,
+        concept_id: str,
+        relation: str = "REFERENCES",
+        weight: float = 1.0,
+    ) -> None:
+        """
+        Link a turn to a symbolic concept.
+
+        Enables queries like "Show all turns about concept X".
+
+        Args:
+            turn_id: Turn node ID
+            concept_id: Concept node ID (from SymbolicMemory)
+            relation: Edge label (default: "REFERENCES")
+            weight: Edge weight (0.0-1.0)
+
+        Raises:
+            ValueError: If turn or concept doesn't exist.
+        """
+        if not self.graph.has_node(turn_id):
+            raise ValueError(f"Turn '{turn_id}' does not exist")
+        if not self.graph.has_node(concept_id):
+            raise ValueError(f"Concept '{concept_id}' does not exist")
+
+        edge_id = f"edge_{turn_id}_{relation}_{concept_id}"
+        if not self.graph.has_edge(edge_id):
+            edge = Edge(
+                id=edge_id,
+                label=relation,
+                type=EdgeType.ASYMMETRIC,
+                connections=(turn_id, concept_id),
+                weight=weight,
+            )
+            self.graph.add_edge(edge)
+
+    def get_turns_referencing(self, concept_id: str) -> list[Node]:
+        """Get all turns referencing a specific concept."""
+        result = []
+        for edge in self.graph.get_edges():
+            if edge.get_label() == "REFERENCES":
+                source, target = edge.get_connections()
+                if target == concept_id and self.graph.has_node(source):
+                    node = self.graph.get_node(source)
+                    if node.get_label() == "EpisodicTurn":
+                        result.append(node)
+
+        return result
+
+    # Query Operations
+    def query(
+        self,
+        query: str,
+        max_results: int = 5,
+        min_confidence: float = 0.0,
+    ) -> list[Node]:
+        """
+        Query turns by keyword matching in content.
+
+        Args:
+            query: Search query
+            max_results: Maximum results to return
+            min_confidence: Minimum confidence threshold
+
+        Returns:
+            List of matching turns, sorted by relevance.
+        """
+        query_words = set(query.lower().split())
+        if not query_words:
+            return []
+
+        def matches_query(node: Node) -> bool:
+            content = node.get_metadata().get("content", "").lower()
+            for word in query_words:
+                if word not in content:
+                    return False
+            confidence = node.get_metadata().get("confidence", 1.0)
+            return confidence >= min_confidence
+
+        # C++ traversal for efficient filtering
+        try:
+            sub = subgraph_by_predicate(self.graph, matches_query)
+            nodes = sub.get_nodes()
+            nodes.sort(
+                key=lambda n: n.get_metadata().get("timestamp", ""), reverse=True
+            )
+            return nodes[:max_results]
+        except Exception as e:
+            self.logger.warning(f"Query failed, falling back to manual: {e}")
+            # Fallback: manual scoring
+            turn_ids = find_nodes_by_label(self.graph, "EpisodicTurn")
+            scored = []
+            for tid in turn_ids:
+                node = self.graph.get_node(tid)
+                content = node.get_metadata().get("content", "").lower()
+                score = sum(1 for w in query_words if w in content)
+                if score > 0:
+                    confidence = node.get_metadata().get("confidence", 1.0)
+                    if confidence >= min_confidence:
+                        scored.append((node, score))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return [n for n, _ in scored[:max_results]]
+
+    # Utility Operations
+    def clear(self) -> None:
+        """Clear all turns and edges."""
+        turn_ids = set(find_nodes_by_label(self.graph, "EpisodicTurn"))
+        if not turn_ids:
+            return
+
+        # Remove edges first to avoid orphaned references
+        edges_to_remove = []
+        for edge in self.graph.get_edges():
+            conn = edge.get_connections()
+            if not edge.is_group_edge():
+                source, target = conn
+                if source in turn_ids or target in turn_ids:
+                    edges_to_remove.append(edge.get_id())
+            else:
+                if any(member in turn_ids for member in conn):
+                    edges_to_remove.append(edge.get_id())
+
+        for eid in edges_to_remove:
+            self.graph.remove_edge(eid)
+
+        for tid in turn_ids:
+            self.graph.remove_node(tid)
+
+        self._current_turn_id = None
+        self._turn_order.clear()
+        self._turn_count = 0
+
+    def __len__(self) -> int:
+        """Number of turns (O(1))."""
+        return self._turn_count
+
+    def __repr__(self) -> str:
+        return f"EpisodicMemory(turns={len(self)})"
+
+    # Serialization
+    def to_binary_b64(self) -> str:
+        """Serialize to base64-encoded binary."""
+        binary_data = GraphSerializer.to_binary(self.graph)
+        return base64.b64encode(binary_data).decode("ascii")
+
+    @classmethod
+    def from_binary_b64(cls, b64_data: str) -> "EpisodicMemory":
+        """Deserialize from base64-encoded binary."""
+        if not b64_data:
+            return cls()
+        try:
+            binary_data = base64.b64decode(b64_data.encode("ascii"))
+            graph = GraphSerializer.from_binary(binary_data)
+            memory = cls(graph=graph)
+            memory._rebuild_order()
+            return memory
+        except Exception as e:
+            logging.getLogger("[EpisodicMemory]").error(f"Deserialization failed: {e}")
+            return cls()
+
+    def _rebuild_order(self) -> None:
+        """Rebuild turn order from graph after deserialization."""
+        turn_ids = find_nodes_by_label(self.graph, "EpisodicTurn")
+        turns = []
+        for tid in turn_ids:
+            node = self.graph.get_node(tid)
+            turns.append((tid, node.get_metadata().get("timestamp", "")))
+        turns.sort(key=lambda x: x[1])
+        self._turn_order = [tid for tid, _ in turns]
+        self._turn_count = len(self._turn_order)
+        self._current_turn_id = self._turn_order[-1] if self._turn_order else None
