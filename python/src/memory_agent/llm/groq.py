@@ -103,6 +103,8 @@ class GroqLLM(BaseLLM):
         Raises:
             Exception: On API errors
         """
+        messages = self._sanitize_messages(messages)
+
         try:
             self.logger.debug(f"Chat request: {len(messages)} messages")
 
