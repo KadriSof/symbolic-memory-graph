@@ -5,7 +5,7 @@ Provides foundational types and state management for the agent's cognitive archi
 """
 
 from .state import AgentState, CogitoState
-from .memory import SymbolicMemory
+from .memory import SymbolicMemory, EpisodicMemory
 from .types import (
     Entity,
     Relation,
@@ -24,6 +24,7 @@ __all__ = [
     "CogitoState",
     # Memory
     "SymbolicMemory",
+    "EpisodicMemory",
     # Types
     "Entity",
     "Relation",
