@@ -57,9 +57,37 @@ class BaseLLM(ABC):
             log_errors=True,
         )
 
+    @staticmethod
+    def _sanitize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Sanitize messages to only include keys accepted by LLM APIs (Groq/OpenAI).
+
+        Removes internal state metadata like 'timestamp', 'tokens', 'step', etc.
+        that were added by BaseState.add_message() for tracking purposes.
+
+        Args:
+            messages: List of message dictionaries from agent state
+
+        Returns:
+            List of cleaned message dictionaries safe for LLM API calls
+        """
+        allowed_keys = {"role", "content", "name", "tool_calls", "tool_call_id"}
+
+        sanitized = []
+        for msg in messages:
+            clean_msg = {k: v for k, v in msg.items() if k in allowed_keys}
+            sanitized.append(clean_msg)
+
+        return sanitized
+
     @abstractmethod
     def chat(self, messages: Messages) -> str:
         """Generate a chat completion."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def chat_stream(self, messages: Messages) -> str:
+        """Generate a chat stream."""
         raise NotImplementedError
 
     @abstractmethod
@@ -84,6 +112,8 @@ class BaseLLM(ABC):
 
         Uses the robust JSON parser we already built.
         """
+        messages = self._sanitize_messages(messages)
+
         try:
             # Try native structured output first
             try:

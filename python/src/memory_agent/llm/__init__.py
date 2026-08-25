@@ -10,6 +10,7 @@ Provides abstract and concrete LLM implementations:
 
 import logging
 from .base import BaseLLM, GenerationConfig
+from .summarization import summarize_conversation
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,16 @@ except ImportError as e:
     logger.debug(f"LlamaCppLLM not available: {e}")
     LlamaCppLLM = None
 
+try:
+    from .openrouter import OpenRouterLLM
+except ImportError as e:
+    logger.debug(f"OpenRouter not available: {e}")
+    OpenRouterLLM = None
+
 __all__ = [
     "BaseLLM",
     "GenerationConfig",
     "GroqLLM",
     "LlamaCppLLM",
+    "summarize_conversation",
 ]

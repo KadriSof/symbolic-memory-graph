@@ -8,7 +8,8 @@ class Tool:
 
     name: str
     description: str
-    fn: Callable[..., str]
+    parameters: dict[str, Any]
+    fn: Callable[..., Any]
 
     def execute(self, **kwargs: Any) -> Any:
         return self.fn(**kwargs)
