@@ -1,9 +1,11 @@
+import json
 import uuid
 import base64
 import logging
 
 from typing import Any
 from datetime import datetime
+from dataclasses import dataclass, field, asdict
 
 from memory_graph.core import MemoryGraph, Node, Edge, EdgeType
 from memory_graph.core.traversal import (
@@ -12,6 +14,89 @@ from memory_graph.core.traversal import (
     subgraph_by_predicate,
 )
 from memory_graph.core.serialization import GraphSerializer
+
+
+# MEMORY SYSTEM
+@dataclass
+class WorkingMemory:
+    """
+    Short-term context.
+    Contains current goal, plan, intermediate results, and errors.
+    """
+
+    goal: str = ""
+    plan: list[str] = field(default_factory=list)
+    current_step: int = 0
+
+    extracted_entities: list[dict[str, Any]] = field(default_factory=list)
+    extracted_relations: list[dict[str, Any]] = field(default_factory=list)
+    retrieved_knowledge: dict[str, Any] = field(default_factory=dict)
+    consolidated_knowledge: dict[str, Any] = field(default_factory=dict)
+
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+    gaps: list[str] = field(default_factory=list)
+    reasoning: str = ""
+    final_answer: str = ""
+
+    reasoning_complete: bool = False
+    needs_more_data: bool = False
+    clarification_response: str | None = None
+
+    start_time: float | None = None
+    step_times: dict[str, float] = field(default_factory=dict)
+    token_usage: int = 0
+
+    def reset(self) -> None:
+        """Reset working memory to initial defaults."""
+        self.goal = ""
+        self.plan.clear()
+        self.current_step = 0
+        self.extracted_entities.clear()
+        self.extracted_relations.clear()
+        self.retrieved_knowledge.clear()
+        self.consolidated_knowledge.clear()
+        self.conflicts.clear()
+        self.gaps.clear()
+        self.reasoning = ""
+        self.final_answer = ""
+        self.reasoning_complete = False
+        self.needs_more_data = False
+        self.clarification_response = None
+        self.start_time = None
+        self.step_times.clear()
+        self.token_usage = 0
+
+    def to_context_string(self, max_chars: int = 2000) -> str:
+        """Convert working memory to a concise prompt context."""
+        context = []
+        if self.goal:
+            context.append(f"## Goal: {self.goal}")
+        if self.plan:
+            step_str = f"{self.current_step + 1}/{len(self.plan)}"
+            context.append(f"## Plan: {' -> '.join(self.plan)} (Step {step_str})")
+        if self.extracted_entities:
+            context.append(f"## Entities: {json.dumps(self.extracted_entities)}")
+        if self.retrieved_knowledge:
+            context.append(
+                f"## Retrieved: {json.dumps(self.retrieved_knowledge)[:500]}"
+            )
+        if self.conflicts:
+            context.append(f"## Conflicts: {json.dumps(self.conflicts)[:500]}")
+        if self.gaps:
+            context.append(f"## Gaps: {', '.join(self.gaps)}")
+        if self.reasoning:
+            context.append(f"## Reasoning: {self.reasoning[:500]}")
+
+        return "\n".join(context)[:max_chars]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize working memory."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "WorkingMemory":
+        """Deserialize working memory."""
+        return cls(**data)
 
 
 # SYMBOLIC MEMORY
