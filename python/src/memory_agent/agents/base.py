@@ -151,10 +151,6 @@ class BaseState:
         self.messages.append(message)
         self.total_tokens += message["tokens"]
 
-        # Trigger compression when required
-        if self.total_tokens > self.summary_threshold:
-            self._requires_compression = True
-
     def get_messages(self, limit: int | None = None) -> list[Message]:
         """Get recent messages, optionally limited."""
         messages = list(self.messages)
