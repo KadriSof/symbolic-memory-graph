@@ -15,24 +15,30 @@ from memory_graph.core.traversal import (
 )
 from memory_graph.core.serialization import GraphSerializer
 
+from core.types import Entity, Relation
+
 
 # MEMORY SYSTEM
 @dataclass
 class WorkingMemory:
-    """
-    Short-term context.
-    Contains current goal, plan, intermediate results, and errors.
-    """
+    """The Agent's Scratchpad. Tracks goal, plan, results, and errors."""
 
     goal: str = ""
     plan: list[str] = field(default_factory=list)
     current_step: int = 0
 
-    extracted_entities: list[dict[str, Any]] = field(default_factory=list)
-    extracted_relations: list[dict[str, Any]] = field(default_factory=list)
+    # Dynamic routing
+    modus_operandi: str = "REACT"  # "REACT" or "COGITO"
+
+    # Comprehension Output (Strictly typed DTOs)
+    extracted_entities: list["Entity"] = field(default_factory=list)
+    extracted_relations: list["Relation"] = field(default_factory=list)
+
+    # Retrieval & Consolidation Output
     retrieved_knowledge: dict[str, Any] = field(default_factory=dict)
     consolidated_knowledge: dict[str, Any] = field(default_factory=dict)
 
+    # Reasoning State
     conflicts: list[dict[str, Any]] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
     reasoning: str = ""
@@ -42,6 +48,7 @@ class WorkingMemory:
     needs_more_data: bool = False
     clarification_response: str | None = None
 
+    # Metrics
     start_time: float | None = None
     step_times: dict[str, float] = field(default_factory=dict)
     token_usage: int = 0
@@ -51,6 +58,7 @@ class WorkingMemory:
         self.goal = ""
         self.plan.clear()
         self.current_step = 0
+        self.modus_operandi = "REACT"
         self.extracted_entities.clear()
         self.extracted_relations.clear()
         self.retrieved_knowledge.clear()
@@ -66,7 +74,16 @@ class WorkingMemory:
         self.step_times.clear()
         self.token_usage = 0
 
-    def to_context_string(self, max_chars: int = 2000) -> str:
+    def has_conflicts(self) -> bool:
+        return bool(self.conflicts)
+
+    def has_gaps(self) -> bool:
+        return bool(self.gaps)
+
+    def is_ready_for_reasoning(self) -> bool:
+        return not self.has_conflicts() and not self.has_gaps()
+
+    def to_prompt_context(self, max_chars: int = 2000) -> str:
         """Convert working memory to a concise prompt context."""
         context = []
         if self.goal:
@@ -75,13 +92,15 @@ class WorkingMemory:
             step_str = f"{self.current_step + 1}/{len(self.plan)}"
             context.append(f"## Plan: {' -> '.join(self.plan)} (Step {step_str})")
         if self.extracted_entities:
-            context.append(f"## Entities: {json.dumps(self.extracted_entities)}")
-        if self.retrieved_knowledge:
-            context.append(
-                f"## Retrieved: {json.dumps(self.retrieved_knowledge)[:500]}"
+            # Safely serialize DTOs to strings for the LLM
+            entities_str = ", ".join(
+                [f"{e.label} ({e.type})" for e in self.extracted_entities]
             )
+            context.append(f"## Entities: {entities_str}")
+        if self.retrieved_knowledge:
+            context.append(f"## Retrieved: {str(self.retrieved_knowledge)[:500]}")
         if self.conflicts:
-            context.append(f"## Conflicts: {json.dumps(self.conflicts)[:500]}")
+            context.append(f"## Conflicts: {str(self.conflicts)[:500]}")
         if self.gaps:
             context.append(f"## Gaps: {', '.join(self.gaps)}")
         if self.reasoning:
@@ -90,12 +109,23 @@ class WorkingMemory:
         return "\n".join(context)[:max_chars]
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize working memory."""
-        return asdict(self)
+        """Serialize working memory (handles DTOs gracefully)."""
+        data = asdict(self)
+        # asdict will convert Entity/Relation to dicts automatically
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorkingMemory":
         """Deserialize working memory."""
+        # Reconstruct DTOs from dictionaries if they exist
+        from .types import Entity, Relation
+
+        entities = [Entity(**e) for e in data.get("extracted_entities", [])]
+        relations = [Relation(**r) for r in data.get("extracted_relations", [])]
+
+        data["extracted_entities"] = entities
+        data["extracted_relations"] = relations
+
         return cls(**data)
 
 
@@ -633,10 +663,28 @@ class SymbolicMemory:
 
     def save(self, filepath: str) -> None:
         """Save knowledge graph to file."""
-        import json
-
         with open(filepath, "w") as f:
             json.dump(self.to_json(), f, indent=2)
+
+    # Serialization
+    def to_binary_b64(self) -> str:
+        """Serialize to base64-encoded binary."""
+        binary_data = GraphSerializer.to_binary(self.graph)
+        return base64.b64encode(binary_data).decode("ascii")
+
+    @classmethod
+    def from_binary_b64(cls, b64_data: str) -> "SymbolicMemory":
+        """Deserialize from base64-encoded binary."""
+        if not b64_data:
+            return cls()
+        try:
+            binary_data = base64.b64decode(b64_data.encode("ascii"))
+            graph = GraphSerializer.from_binary(binary_data)
+            memory = cls(graph=graph)
+            return memory
+        except Exception as e:
+            logging.getLogger("[SymbolicMemory]").error(f"Deserialization failed: {e}")
+            return cls()
 
     @classmethod
     def load(cls, filepath: str) -> "SymbolicMemory":
