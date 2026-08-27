@@ -19,6 +19,8 @@ from .agents.base import BaseAgent
 
 # Core Types
 from .core import (
+    # Prompts
+    Prompts,
     # State
     AgentState,
     CogitoState,
@@ -26,13 +28,13 @@ from .core import (
     Entity,
     Relation,
     KnowledgeDelta,
-    Confidence,
-    ConfidenceScored,
     ComprehensionResult,
     ReasoningResult,
-    ConsolidationResult,
-    # Prompts
-    Prompts,
+    # Schemas
+    EntitySchema,
+    RelationSchema,
+    ComprehensionSchema,
+    ConsolidationSchema,
 )
 
 # LLM
@@ -56,6 +58,8 @@ __version__ = "0.1.0"
 
 # Public API
 __all__ = [
+    # Prompts
+    "Prompts",
     # Agents
     "CogitoAgent",
     "ReactAgent",
@@ -63,15 +67,17 @@ __all__ = [
     # Core Types
     "AgentState",
     "CogitoState",
+    # DTOs
     "Entity",
     "Relation",
-    "KnowledgeDelta",
-    "Confidence",
-    "ConfidenceScored",
     "ComprehensionResult",
+    "KnowledgeDelta",
     "ReasoningResult",
-    "ConsolidationResult",
-    "Prompts",
+    # LLM Models
+    "EntitySchema",
+    "RelationSchema",
+    "ComprehensionSchema",
+    "ConsolidationSchema",
     # LLM
     "BaseLLM",
     "GenerationConfig",

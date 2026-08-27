@@ -4,6 +4,7 @@ Core Primitives for the Cogito Agent.
 Provides foundational types and state management for the agent's cognitive architecture.
 """
 
+from .prompts import Prompts
 from .state import AgentState, CogitoState
 from .memory import WorkingMemory, SymbolicMemory, EpisodicMemory
 from .orchestrator import (
@@ -16,15 +17,21 @@ from .types import (
     Entity,
     Relation,
     KnowledgeDelta,
-    Confidence,
-    ConfidenceScored,
     ComprehensionResult,
+    KnowledgeDelta,
     ReasoningResult,
-    ConsolidationResult,
+)
+from .schemas import (
+    EntitySchema,
+    RelationSchema,
+    ComprehensionSchema,
+    ConsolidationSchema,
 )
 from .prompts import Prompts
 
 __all__ = [
+    # Prompts
+    "Prompts",
     # State
     "AgentState",
     "CogitoState",
@@ -41,11 +48,11 @@ __all__ = [
     "Entity",
     "Relation",
     "KnowledgeDelta",
-    "Confidence",
-    "ConfidenceScored",
     "ComprehensionResult",
     "ReasoningResult",
-    "ConsolidationResult",
-    # Prompts
-    "Prompts",
+    # Schemas
+    "EntitySchema",
+    "RelationSchema",
+    "ComprehensionSchema",
+    "ConsolidationSchema",
 ]
