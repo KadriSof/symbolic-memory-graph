@@ -331,8 +331,6 @@ class ReactAgent(BaseAgent):
         self._step_times: list[float] = []
         self._tool_times: dict[str, list[float]] = {}
 
-        self._log_init()
-
     def _initialize_state(self) -> BaseState:
         return ReactState()
 
