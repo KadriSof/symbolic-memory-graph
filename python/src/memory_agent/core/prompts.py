@@ -108,37 +108,36 @@ class Prompts:
         """Reasoning prompt."""
         gaps_display = "None" if gaps.strip() in ("[]", "") else gaps
         tool_section = (
-            f"\nTool results:\n{tool_results}"
+            f"\nRecent Tool Results:\n{tool_results}"
             if tool_results and tool_results.strip() not in ("[]", "")
-            else "\nNo tool results needed or available."
+            else "\nNo external tool results available."
         )
 
-        return f"""
-        You are a reasoning agent with access to a symbolic knowledge graph.
+        return f"""You are a highly knowledgeable reasoning agent with access to a symbolic knowledge graph.
 
         User query: {query}
 
-        Knowledge graph context:
+        Knowledge graph context (may be limited):
         {context}
 
-        Identified gaps that need to be filled:
+        Identified gaps to consider:
         {gaps_display}
         {tool_section}
 
         Think step by step:
-        1. What do I need to solve this?
-        2. How does the graph context help?
-        3. What gaps must I fill?
-        4. What is the final solution?
+        1. What does the user actually want to know?
+        2. Does the provided graph context help? (If it's empty or sparse, that's okay).
+        3. Can I answer this using my own extensive internal knowledge?
 
         **CRITICAL OUTPUT RULE:** 
-        If you cannot answer the query with the provided context and lack critical information, you MUST explicitly state: "I need more information about [X]". 
-        Otherwise, provide your final answer clearly after the word "Solution:".
+        The knowledge graph is a *supplement*, not a replacement, for your knowledge. 
+        - If the graph context is limited, **you MUST rely on your own extensive internal knowledge** to provide a comprehensive, helpful, and accurate answer. 
+        - ONLY state "I need more information about [X]" if the query is highly specific, requires real-time data (like current weather or stock prices), or absolutely cannot be answered without external tools or user clarification.
 
-        Format:
-        [Your step-by-step reasoning...]
+        Format your response as:
+        [Your step-by-step reasoning, synthesizing graph context and your internal knowledge...]
 
-        Solution: [Your final answer OR "I need more information about X"]
+        Solution: [Your final, comprehensive answer]
         """
 
     # Step 6: RESPOND
