@@ -171,11 +171,9 @@ class OpenRouterLLM(BaseLLM):
 
             response.raise_for_status()
 
-            # ✅ FIX: Check for OpenRouter API error payloads
             if "error" in response_data:
                 raise Exception(f"OpenRouter API error: {response_data['error']}")
 
-            # ✅ FIX: Safely access choices
             choices = response_data.get("choices", [])
 
             if not choices:
@@ -184,7 +182,6 @@ class OpenRouterLLM(BaseLLM):
             content = choices[0]["message"].get("content", "")
             content = response.json()["choices"][0]["message"]["content"]
 
-            self.logger.debug(f"Chat response: {len(content)} characters")
             return content
 
         except Exception as e:
