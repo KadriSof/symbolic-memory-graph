@@ -15,7 +15,7 @@ from memory_graph.core.traversal import (
 )
 from memory_graph.core.serialization import GraphSerializer
 
-from core.types import Entity, Relation
+from .types import Entity, Relation
 
 
 # MEMORY SYSTEM
@@ -116,13 +116,24 @@ class WorkingMemory:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorkingMemory":
-        """Deserialize working memory."""
-        # Reconstruct DTOs from dictionaries if they exist
+        """Deserialize working memory, safely handling auto-generated DTO fields."""
         from .types import Entity, Relation
 
-        entities = [Entity(**e) for e in data.get("extracted_entities", [])]
-        relations = [Relation(**r) for r in data.get("extracted_relations", [])]
+        # 1. Reconstruct Entities (filter out auto-generated 'id')
+        entities = []
+        for e in data.get("extracted_entities", []):
+            e_clean = {k: v for k, v in e.items() if k != "id"}
+            entities.append(Entity(**e_clean))
 
+        # 2. Reconstruct Relations (filter out auto-generated 'source', 'target', 'edge_id')
+        relations = []
+        for r in data.get("extracted_relations", []):
+            r_clean = {
+                k: v for k, v in r.items() if k not in ("source", "target", "edge_id")
+            }
+            relations.append(Relation(**r_clean))
+
+        # 3. Update data and instantiate
         data["extracted_entities"] = entities
         data["extracted_relations"] = relations
 
