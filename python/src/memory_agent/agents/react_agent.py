@@ -18,13 +18,14 @@ from __future__ import annotations
 import re
 import time
 import json
+import copy
 
 from enum import Enum
 from datetime import datetime
+from collections import deque
 from dataclasses import dataclass, field
 
 from typing import Any
-
 
 from .base import (
     AgentStatus,
@@ -33,11 +34,382 @@ from .base import (
     AgentError,
     MessageRole,
     ToolExecutionError,
-    TokenLimitExceeded,
 )
 
-from ..llm.base import BaseLLM, Message
+from ..llm.base import BaseLLM
 from ..tools import Tool
+
+
+# DATA MODELS
+@dataclass
+class ToolCallRecord:
+    tool: str
+    args: dict[str, Any]
+    result: str | None
+    timestamp: str
+    turn: int
+    step: int
+    duration: float | None = None
+
+
+@dataclass
+class TrajectoryStep:
+    turn: int
+    step: int
+
+    thought: str | None = None
+    action: str | None = None
+    action_args: dict[str, Any] | None = None
+    observation: str | None = None
+    result: str | None = None
+    error: str | None = None
+
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def summary(self) -> str:
+        parts = [f"Turn {self.turn}, Step {self.step}:"]
+
+        if self.thought:
+            parts.append(f"Thought: {self.thought}")
+
+        if self.action:
+            parts.append(f"Action: {self.action}")
+
+        if self.action_args:
+            parts.append(f"Input: {json.dumps(self.action_args, ensure_ascii=False)}")
+
+        if self.observation:
+            parts.append(f"Observation: {self.observation}")
+
+        if self.result:
+            parts.append(f"Result: {self.result}")
+
+        if self.error:
+            parts.append(f"Error: {self.error}")
+
+        return " | ".join(parts)
+
+
+# REACT STATE
+@dataclass
+class ReactState(BaseState):
+    """
+    ReAct-specific execution state.
+
+    Tracks:
+    - reasoning thoughts
+    - tool executions
+    - observations
+    - ReAct trajectory
+    - turn/step counters
+    - execution timing
+    - error recovery
+    """
+
+    # Memory
+    thoughts: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls: list[ToolCallRecord] = field(default_factory=list)
+    observations: deque = field(default_factory=deque)
+
+    max_observations: int = 30
+
+    # ReAct execution
+    current_turn: int = 0
+    current_step: int = 0
+
+    trajectory: list[TrajectoryStep] = field(default_factory=list)
+
+    # Performance
+    turn_start_time: float | None = None
+    total_execution_time: float = 0.0
+    total_tool_time: float = 0.0
+
+    # Error recovery
+    consecutive_errors: int = 0
+    max_consecutive_errors: int = 3
+    last_error: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.observations = deque(
+            self.observations,
+            maxlen=self.max_observations,
+        )
+
+    # Turn / Step Management
+    def start_turn(self) -> None:
+        """Begin a new agent invocation."""
+        self.current_turn += 1
+        self.current_step = 0
+        self.turn_start_time = time.perf_counter()
+        self.status = AgentStatus.RUNNING
+
+    def end_turn(self) -> None:
+        """Complete the current agent invocation."""
+        if self.turn_start_time is not None:
+            self.total_execution_time += time.perf_counter() - self.turn_start_time
+
+        self.turn_start_time = None
+
+    def increment_step(self) -> None:
+        """Advance to the next ReAct reasoning step."""
+        self.current_step += 1
+
+    # Trajectory
+    def _get_or_create_trajectory_step(self) -> TrajectoryStep:
+        """Return the trajectory entry for the current step."""
+
+        if self.trajectory:
+            last = self.trajectory[-1]
+
+            if last.turn == self.current_turn and last.step == self.current_step:
+                return last
+
+        step = TrajectoryStep(
+            turn=self.current_turn,
+            step=self.current_step,
+        )
+
+        self.trajectory.append(step)
+
+        return step
+
+    # Thought Management
+    def record_thought(
+        self,
+        thought: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a reasoning thought."""
+
+        self.thoughts.append(
+            {
+                "content": thought,
+                "timestamp": datetime.now().isoformat(),
+                "turn": self.current_turn,
+                "step": self.current_step,
+                **(metadata or {}),
+            }
+        )
+
+        trajectory_step = self._get_or_create_trajectory_step()
+        trajectory_step.thought = thought
+
+    def retrieve_recent_thoughts(
+        self,
+        limit: int = 5,
+    ) -> list[str]:
+        """Get recent thought contents."""
+        if limit <= 0:
+            raise ValueError("limit must be greater than zero")
+
+        return [thought["content"] for thought in self.thoughts[-limit:]]
+
+    # Tool Call Management
+    def record_tool_call(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        result: str | None = None,
+        duration: float | None = None,
+    ) -> None:
+        """Record a tool execution."""
+
+        self.tool_calls.append(
+            ToolCallRecord(
+                tool=tool_name,
+                args=copy.deepcopy(args),
+                result=result,
+                timestamp=datetime.now().isoformat(),
+                turn=self.current_turn,
+                step=self.current_step,
+                duration=duration,
+            )
+        )
+
+        trajectory_step = self._get_or_create_trajectory_step()
+        trajectory_step.action = tool_name
+        trajectory_step.action_args = args
+
+    def retrieve_tool_calls(
+        self,
+        tool_name: str | None = None,
+    ) -> list[ToolCallRecord]:
+        """Get tool call history, optionally filtered by tool."""
+        if tool_name is None:
+            return list(self.tool_calls)
+
+        return [call for call in self.tool_calls if call.tool == tool_name]
+
+    # Observation Management
+    def record_observation(
+        self,
+        observation: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a tool observation."""
+
+        entry = {
+            "turn": self.current_turn,
+            "step": self.current_step,
+            "observation": observation,
+            "timestamp": datetime.now().isoformat(),
+            **(metadata or {}),
+        }
+
+        self.observations.append(entry)
+
+        trajectory_step = self._get_or_create_trajectory_step()
+        trajectory_step.observation = observation
+
+    def retrieve_observations(
+        self,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve recent observations."""
+
+        observations = list(self.observations)
+
+        if limit is None:
+            return observations
+
+        if limit <= 0:
+            raise ValueError("limit must be greater than zero")
+
+        return observations[-limit:]
+
+    # Result / Error Management
+    def record_result(self, result: str) -> None:
+        """Record the final result for the current step."""
+
+        trajectory_step = self._get_or_create_trajectory_step()
+        trajectory_step.result = result
+
+    def record_error(self, error: str) -> None:
+        """Record an execution error."""
+
+        self.consecutive_errors += 1
+        self.last_error = error
+
+        trajectory_step = self._get_or_create_trajectory_step()
+        trajectory_step.error = error
+
+        self.status = AgentStatus.ERROR
+
+    def reset_errors(self) -> None:
+        """Reset error recovery state."""
+
+        self.consecutive_errors = 0
+        self.last_error = None
+
+    def should_abort(self) -> bool:
+        """Return whether execution should be aborted."""
+
+        return self.consecutive_errors >= self.max_consecutive_errors
+
+    # Trajectory Retrieval
+    def get_trajectory_summary(
+        self,
+        limit: int = 5,
+    ) -> str:
+        """Return a compact representation of recent trajectory steps."""
+
+        if not self.trajectory:
+            return "No trajectory yet."
+
+        recent = self.trajectory[-limit:]
+
+        return "\n".join(step.summary() for step in recent)
+
+    # Persistence
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize state for persistence."""
+
+        data = super().to_dict()
+
+        data.update(
+            {
+                "thoughts": self.thoughts,
+                "tool_calls": [call.__dict__ for call in self.tool_calls],
+                "observations": list(self.observations),
+                "max_observations": self.max_observations,
+                "current_turn": self.current_turn,
+                "current_step": self.current_step,
+                "trajectory": [step.__dict__ for step in self.trajectory],
+                "total_execution_time": self.total_execution_time,
+                "total_tool_time": self.total_tool_time,
+                "consecutive_errors": self.consecutive_errors,
+                "max_consecutive_errors": self.max_consecutive_errors,
+                "last_error": self.last_error,
+            }
+        )
+
+        return data
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+    ) -> "ReactState":
+        """Deserialize state."""
+
+        state = super().from_dict(data)
+
+        if not isinstance(state, ReactState):
+            raise TypeError("Expected ReactState")
+
+        state.thoughts = data.get("thoughts", [])
+        state.tool_calls = [
+            ToolCallRecord(**call) for call in data.get("tool_calls", [])
+        ]
+        state.observations = deque(
+            data.get("observations", []),
+            maxlen=state.max_observations,
+        )
+        state.current_turn = data.get("current_turn", 0)
+        state.current_step = data.get("current_step", 0)
+        state.trajectory = [
+            TrajectoryStep(**step) for step in data.get("trajectory", [])
+        ]
+        state.total_execution_time = data.get(
+            "total_execution_time",
+            0.0,
+        )
+        state.total_tool_time = data.get(
+            "total_tool_time",
+            0.0,
+        )
+        state.consecutive_errors = data.get(
+            "consecutive_errors",
+            0,
+        )
+        state.last_error = data.get("last_error")
+
+        return state
+
+    # Reset
+    def reset(
+        self,
+        keep_metadata: bool = False,
+    ) -> None:
+        """Reset the complete ReAct execution state."""
+
+        super().reset(keep_metadata)
+
+        self.thoughts.clear()
+        self.tool_calls.clear()
+        self.observations.clear()
+        self.trajectory.clear()
+
+        self.current_turn = 0
+        self.current_step = 0
+
+        self.turn_start_time = None
+        self.total_execution_time = 0.0
+        self.total_tool_time = 0.0
+
+        self.consecutive_errors = 0
+        self.last_error = None
 
 
 # Constants and Markers:
@@ -61,7 +433,9 @@ class ReactMarker(str, Enum):
     @classmethod
     def extract(cls, text: str, marker: "ReactMarker") -> str | None:
         """Extract content between markers."""
-        pattern = f"{marker.open_tag}(.*?){marker.close_tag}"
+        pattern = (
+            rf"{re.escape(marker.open_tag)}" rf"(.*?)" rf"{re.escape(marker.close_tag)}"
+        )
         match = re.search(pattern, text, re.DOTALL)
         return match.group(1).strip() if match else None
 
@@ -71,137 +445,8 @@ class ReactMarker(str, Enum):
         return marker.open_tag in text and marker.close_tag in text
 
 
-# REACT STATE
-@dataclass
-class ReactState(BaseState):
-    """
-    ReAct-specific state with trajectory tracking.
-
-    Extends BaseAgentState with:
-    - Turn tracking
-    - Tool execution history
-    - Performance metrics
-    - Retry counters
-    """
-
-    # ReAct specific
-    current_turn: int = 0
-    tool_history: list[dict[str, Any]] = field(default_factory=list)
-    trajectory: list[dict[str, Any]] = field(default_factory=list)
-
-    # Performance tracking
-    turn_start_time: float | None = None
-    total_reasoning_time: float = 0.0
-    total_tool_time: float = 0.0
-
-    # Error recovery
-    consecutive_errors: int = 0
-    max_consecutive_errors: int = 3
-    last_error: str | None = None
-
-    def start_turn(self) -> None:
-        """Begin a new reasoning turn."""
-        self.current_turn += 1
-        self.step_count = self.current_turn
-        self.turn_start_time = time.time()
-        self.status = AgentStatus.THINKING
-
-    def end_turn(self, result: str) -> None:
-        """Complete a reasoning turn with result."""
-        if self.turn_start_time:
-            self.total_reasoning_time += time.time() - self.turn_start_time
-
-        self.trajectory.append(
-            {
-                "turn": self.current_turn,
-                "result": result,
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
-
-        self.status = AgentStatus.IDLE
-
-    def record_tool_execution(
-        self, tool_name: str, kwargs: dict[str, Any], result: str, duration: float
-    ) -> None:
-        """Record a tool execution with metrics."""
-        self.tool_history.append(
-            {
-                "tool": tool_name,
-                "args": kwargs,
-                "result": result[:500],
-                "duration": duration,
-                "timestamp": datetime.now().isoformat(),
-                "turn": self.current_turn,
-            }
-        )
-        self.total_tool_time += duration
-
-    def record_error(self, error: str) -> None:
-        """Record an error for recovery tracking."""
-        self.consecutive_errors += 1
-        self.last_error = error
-        self.status = AgentStatus.ERROR
-
-    def reset_errors(self) -> None:
-        """Reset error counter after successful step."""
-        self.consecutive_errors = 0
-        self.last_error = None
-
-    def should_abort(self) -> bool:
-        """Check if agent should abort due to many errors."""
-        return self.consecutive_errors >= self.max_consecutive_errors
-
-    def get_trajectory_summary(self) -> str:
-        """Get a compressed trajectory summary for prompts."""
-        if not self.trajectory:
-            return "Non trajectory yet."
-
-        recent = self.trajectory[-3:]  # Last 3 turns
-        summary = []
-        for step in recent:
-            summary.append(f"Turn {step['turn']}: {step['result'][:100]}")
-
-        return "\n".join(summary)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize state for persistence."""
-        base_dict = super().to_dict()
-        base_dict.update(
-            {
-                "current_turn": self.current_turn,
-                "tool_history": self.tool_history,
-                "trajectory": self.trajectory,
-                "total_reasoning_time": self.total_reasoning_time,
-                "total_tool_time": self.total_tool_time,
-                "consecutive_errors": self.consecutive_errors,
-                "last_error": self.last_error,
-            }
-        )
-
-        return base_dict
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ReactState":
-        """Deserialize state."""
-        state = super().from_dict(data)
-
-        if not isinstance(state, cls):
-            raise TypeError(f"Expected {cls.__name__}, got {type(state).__name__}")
-
-        state.current_turn = data.get("current_turn", 0)
-        state.tool_history = data.get("tool_history", [])
-        state.trajectory = data.get("trajectory", [])
-        state.total_reasoning_time = data.get("total_reasoning_time", 0.0)
-        state.total_tool_time = data.get("total_tool_time", 0.0)
-        state.consecutive_errors = data.get("consecutive_errors", 0)
-        state.last_error = data.get("last_error")
-
-        return state
-
-
 # PARSED ACTION:
-@dataclass
+@dataclass(frozen=True)
 class ParsedAction:
     """Type-safe representation of a parsed ReAct action."""
 
@@ -240,42 +485,20 @@ class ParsedAction:
             return None
 
         return cls(
-            thought=thought, action=action, action_input=action_input, raw_text=text
+            thought=thought,
+            action=action.strip(),
+            action_input=action_input,
+            raw_text=text,
         )
 
     @staticmethod
     def _parse_json(text: str) -> dict[str, Any]:
-        """
-        Robust JSON parsing with fallbacks.
+        value = json.loads(text.strip())
 
-        Handles:
-        - Extra text before/after JSON
-        - Nested objects
-        - Single vs double quotes
-        - Trailing commas
-        """
-        # Try direct parsing first
-        try:
-            return json.loads(text.strip())
-        except json.JSONDecodeError:
-            pass
+        if not isinstance(value, dict):
+            raise json.JSONDecodeError("Action_INPUT must be a JSON object", text, 0)
 
-        # Find JSON boundaries
-        start = text.find("{")
-        end = text.rfind("}")
-
-        if start == -1 or end == -1:
-
-            raise json.JSONDecodeError("No JSON object found", text, 0)
-
-        json_str = text[start : end + 1]
-
-        # Clean common issues
-        json_str = re.sub(
-            r"([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:", r'\1"\2":', json_str
-        )
-
-        return json.loads(json_str)
+        return value
 
     @property
     def is_final_answer(self) -> bool:
@@ -292,18 +515,14 @@ class ReactAgent(BaseAgent):
     - Structured state management
     - Comprehensive error recovery
     - Performance monitoring
-    - Streaming support
-    - Retry logic with backoff
-    - Token budged management
-    - Graceful degradation
     """
 
     def __init__(
         self,
-        llm: "BaseLLM",
-        tools: list["Tool"] | None = None,
+        llm: BaseLLM,
+        tools: list[Tool] | None = None,
         config: dict[str, Any] | None = None,
-        state: BaseState | None = None,
+        state: ReactState | None = None,
     ) -> None:
         """
         Initialize ReAct Agent.
@@ -314,21 +533,15 @@ class ReactAgent(BaseAgent):
             config: Configuration dict with keys:
                 - max_steps: Maximum reasoning steps (default: 10)
                 - max_retries: Max retries per step (default: 2)
-                - timeout: Per-step timeout (default: 30)
                 - debug: Enable debug logging (default: False)
-                - token_budget: Max tokens (default: 8000)
-                - streaming: Enable streaming (default: False)
         """
         super().__init__(llm, tools, config, state)
 
         # ReAct specific config
         self.max_steps = self.config.get("max_steps", 10)
-        self.max_retries = self.config.get("max_retries", 2)
-        self.max_step_timeout = self.config.get("timeout", 30)
-        self.streaming_enabled = self.config.get("streaming", False)
+        self.max_retries = self.config.get("max_retries", 3)
 
         # Performance tracking
-        self._step_times: list[float] = []
         self._tool_times: dict[str, list[float]] = {}
 
     def _initialize_state(self) -> BaseState:
@@ -337,7 +550,12 @@ class ReactAgent(BaseAgent):
     @property
     def state(self) -> ReactState:
         """Get state with correct type."""
-        return super().state  # type: ignore
+        state = super().state
+
+        if not isinstance(state, ReactState):
+            raise TypeError("ReactAgent requires ReactState")
+
+        return state
 
     @classmethod
     def _state_class(cls) -> type[BaseState]:
@@ -398,23 +616,11 @@ class ReactAgent(BaseAgent):
         """Format tool descriptions for prompt."""
         descriptions = []
         for tool in self.tools.values():
-            desc = f"  - {tool.name}: {tool.description}"
-            if hasattr(tool, "parameters"):
-                if isinstance(tool.parameters, dict):
-                    serializable_params = {
-                        k: v.__name__ if isinstance(v, type) else v
-                        for k, v in tool.parameters.items()
-                    }
-                    desc += (
-                        f"\n    Parameters: {json.dumps(serializable_params, indent=2)}"
-                    )
-                else:
-                    try:
-                        desc += (
-                            f"\n    Parameters: {json.dumps(tool.parameters, indent=2)}"
-                        )
-                    except TypeError:
-                        desc += f"\n    Parameters: {str(tool.parameters)}"
+            tool_schema = tool.schema()
+            desc = f"   - {tool_schema['name']}: {tool_schema['description']}"
+
+            if "input_schema" in tool_schema:
+                desc += f"\n    Input Schema: {json.dumps(tool_schema['input_schema'], indent=2)}"
 
             descriptions.append(desc)
 
@@ -451,7 +657,7 @@ class ReactAgent(BaseAgent):
             return """
             Format your responses using these markers:
 
-            <THOUGHT>Your reasoning about the current situation</THOUGHT>
+            <THOUGHT>concise reasoning summary / decision rationale</THOUGHT>
             <ACTION>The tool name to execute</ACTION>
             <ACTION_INPUT>{"parameter": "value"}</ACTION_INPUT>
 
@@ -467,8 +673,8 @@ class ReactAgent(BaseAgent):
             return """
             Format your responses using these markers:
 
-            <THOUGHT>Your reasoning about the question</THOUGHT>
-            <FINAL_ANSWER>Your complete answer to the user</FINAL_ANSWER>
+            <THOUGHT>concise reasoning summary / decision rationale</THOUGHT>
+            <FINAL_ANSWER>final answer to the user</FINAL_ANSWER>
 
             Since you have no tools, you must directly answer the user's question.
             """
@@ -478,7 +684,7 @@ class ReactAgent(BaseAgent):
         if has_tools:
             return """
             Example with tools:
-            User: "What's the weather in Paris?"
+            User: "What's the weather in Tunis?"
             <THOUGHT>I need to check the current weather in Tunis using the weather tool</THOUGHT>
             <ACTION>get_weather</ACTION>
             <ACTION_INPUT>{"city": "Tunis"}</ACTION_INPUT>
@@ -503,23 +709,22 @@ class ReactAgent(BaseAgent):
     def _build_rules(self, has_tools: bool) -> str:
         """Build rules section."""
         rules = [
-            "1. Always start with <THOUGHT> to show your reasoning",
-            "2. Be concise but thorough in your reasoning",
-            "3. Never invent or hallucinate information",
-            "4. Use exactly one action per response",
+            "1. Provide a concise decision rationale",
+            "2. Never invent or hallucinate information",
+            "3. Use exactly one action per response",
         ]
 
         if has_tools:
             rules.extend(
                 [
-                    "5. Always use valid JSON for <ACTION_INPUT>",
-                    "6. Wait for observations before making new decisions",
-                    "7. If a tool fails, explain the error and try an alternative if possible",
+                    "4. Always use valid JSON for <ACTION_INPUT>",
+                    "5. Wait for observations before making new decisions",
+                    "6. If a tool fails, inspect the error observation and recover when possible.",
                 ]
             )
         else:
             rules.append(
-                "5. Provide complete, accurate answers based on your knowledge"
+                "4. Provide complete, accurate answers based on your knowledge"
             )
 
         return "\n".join(rules)
@@ -536,131 +741,111 @@ class ReactAgent(BaseAgent):
 
     # CORE EXECUTION:
     def _process_query_impl(self, query: str) -> str:
-        """
-        Execute the ReAct loop with full error handling.
+        start_time = time.perf_counter()
 
-        Returns:
-            Final answer string
+        self.logger.info(
+            "Starting ReAct execution: %s",
+            query[:100],
+        )
 
-        Raises:
-            AgentError: On unrecoverable errors
-        """
-        start_time = time.time()
-
-        self.logger.info(f"Starting ReAct execution for query:\n{query[:100]}...\n----")
-
-        for step in range(1, self.max_steps + 1):
-            try:
-                result = self._execute_step(step)
-
-                if result:
-                    self.logger.info(f"ReAct completed in {step} steps")
-                    self._log_performance(start_time)
-                    return result
-
-            except TokenLimitExceeded:
-                self.logger.warning(
-                    f"Token limit exceeded at step {step}, summarizing.."
-                )
-                self._force_summarization()
-                continue
-
-            except Exception as e:
-                self.state.record_error(str(e))
-                self.logger.error(f"Error at step {step}:\n{e}\n----")
-
-                if self.state.should_abort():
-                    raise AgentError(
-                        f"Too many consecutive errors: {self.state.last_error}"
-                    ) from e
-
-                # Attempt recovery
-                recovery_message = f"<OBSERVATION>Error: {str(e)}. Please try a different approach.</OBSERVATION>"
-                self.state.add_message("user", recovery_message)
-                continue
-
-        # Max steps exceeded
-        error_msg = f"Agent exceeded maximum steps ({self.max_steps})"
-        self.logger.error(error_msg)
-        raise AgentError(error_msg)
-
-    def _execute_step(self, step: int) -> str | None:
-        """
-        Execute a single ReAct step.
-
-        Returns:
-            Final answer if complete, None otherwise.
-        """
         self.state.start_turn()
-        self.on_step_start(step)
 
         try:
-            # Get reasoning from LLM
-            response = self._reason(step)
+            for _ in range(self.max_steps):
+                self.state.increment_step()
 
-            # Persist the LLM's answer
-            self.state.add_message("assistant", response)
+                try:
+                    result = self._execute_step()
 
-            # Parse and route response
-            parsed = self._parse_response(response)
+                    if result is not None:
+                        self.state.record_result(result)
+                        self._log_performance(start_time)
+                        return result
 
-            if parsed and parsed.is_final_answer:
-                # Extract and return final answer
-                final_answer = self._extract_final_answer(response)
-                self.state.end_turn(final_answer)
-                return final_answer
+                    self.state.reset_errors()
 
-            if parsed:
-                # Execute tool action
-                observation = self._execute_action(parsed)
-                self.state.add_message(
-                    "user", f"<OBSERVATION>{observation}</OBSERVATION>"
-                )
+                except AgentError as exc:
+                    error = str(exc)
+                    self.state.record_error(str(exc))
 
-                # Reset error counter on success
-                self.state.reset_errors()
-                self.state.end_turn(f"Action: {parsed.action}")
+                    observation = self._format_error_observation(error)
 
-            else:
-                # Parsing failed, add error feedback
-                error_msg = self._format_parse_error(response)
-                self.state.add_message("user", error_msg)
-                self.state.end_turn("Parse Error")
+                    self.logger.warning(
+                        f"Step {self.state.current_step} failed: {exec}"
+                    )
 
-            self.on_step_end(step, "Step completed")
-            return None
+                    self.state.record_message(
+                        MessageRole.TOOL,
+                        observation,
+                        metadata={
+                            "turn": self.state.current_turn,
+                            "step": self.state.current_step,
+                            "error": True,
+                        },
+                    )
 
-        except Exception as e:
-            self.state.record_error(str(e))
-            self.on_error(e)
-            raise
+            raise AgentError(f"Agent exceeded maximum steps ({self.max_steps})")
+
+        finally:
+            self.state.end_turn()
+
+    def _execute_step(self) -> str | None:
+        step = self.state.current_step
+        self.on_step_start(step)
+
+        response = self._reason()
+
+        self.state.record_message(
+            MessageRole.ASSISTANT,
+            response,
+            metadata={
+                "turn": self.state.current_turn,
+                "step": step,
+            },
+        )
+
+        parsed = self._parse_response(response)
+
+        if parsed is None:
+            raise AgentError(self._format_parse_error(response))
+
+        self.state.record_thought(parsed.thought)
+
+        if parsed.is_final_answer:
+            answer = self._extract_final_answer(response)
+
+            if not answer:
+                raise AgentError("Final answer marker was present but empty.")
+
+            return answer
+
+        observation = self._execute_action(parsed)
+
+        self.state.record_observation(observation)
+
+        self.state.record_message(
+            MessageRole.TOOL,
+            observation,
+            metadata={
+                "tool": parsed.action,
+                "turn": self.state.current_turn,
+                "step": step,
+            },
+        )
+
+        self.state.status = AgentStatus.RUNNING
+
+        self.on_step_end(
+            step,
+            observation,
+        )
+
+        return None
 
     # REASONING
-    def _build_reasoning_messages(self, step: int) -> list[Message]:
-        """Prepare messages for LLM call with proper context."""
-        messages = self._prepare_messages()
-
-        if step > 1:
-            messages.append(
-                {
-                    "role": MessageRole.SYSTEM.value,
-                    "content": f"This is turn {step} of {self.max_steps}. You have {self.max_steps - step + 1} turns remaining.",
-                }
-            )
-
-        if self.state.current_turn > 1:
-            messages.append(
-                {
-                    "role": MessageRole.SYSTEM.value,
-                    "content": f"Recent trajectory:\n{self.state.get_trajectory_summary()}",
-                }
-            )
-
-        return messages
-
-    def _reason(self, step: int) -> str:
+    def _reason(self) -> str:
         """
-        Get reasoning from LLM with retry logic.
+        Get reasoning from LLM.
 
         Args:
             step: Current step number
@@ -668,48 +853,23 @@ class ReactAgent(BaseAgent):
         Returns:
             LLM response string
         """
-        messages = self._build_reasoning_messages(step)
+        messages = super()._prepare_messages()
+        self.state.status = AgentStatus.THINKING
 
         # Call LLM with retries
-        for attempt in range(self.max_retries + 1):
-            try:
-                self._log_debug(f"LLM call {attempt + 1}/{self.max_retries + 1}")
-                response = self._llm_call(messages)
+        try:
+            response = self._llm_call(messages)
 
-                self._log_debug(f"LLM response:\n{response}")
-                return response
+            self._log_debug(f"LLM response:\n{response}")
 
-            except Exception as e:
-                if attempt == self.max_retries:
-                    raise
+            if not response.strip():
+                raise AgentError("LLM returned and empty response")
 
-                wait_time = 2**attempt  # for exp. backoff
-                self.logger.warning(f"LLM call failed: {e}, retrying in {wait_time}s")
-                time.sleep(wait_time)
+            return response
 
-        raise AgentError("LLM call failed after all retries")
-
-    def _prepare_messages(self) -> list[Message]:
-        """Prepare messages for LLM call with proper context."""
-        messages = []
-
-        # System prompt
-        messages.append({"role": "system", "content": self._get_system_prompt()})
-
-        # summary if available
-        if self.state.summary:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Previous conversation summary:\n{self.state.summary}",
-                }
-            )
-
-        # conversation history (with token management)
-        history = self.state.get_messages(limit=20)
-        messages.extend(history)
-
-        return messages
+        except AgentError as e:
+            self.logger.warning(f"LLM call failed: {e}")
+            raise
 
     # RESPONSE PARSING
     def _parse_response(self, response: str) -> ParsedAction | None:
@@ -722,10 +882,15 @@ class ReactAgent(BaseAgent):
         - Malformed responses
         - Missing markers
         """
-        # Final Thought
-        if ReactMarker.has_marker(response, ReactMarker.FINAL_ANSWER):
+        thought = ReactMarker.extract(response, ReactMarker.THOUGHT)
+        final_answer = ReactMarker.extract(response, ReactMarker.FINAL_ANSWER)
+
+        if final_answer is not None:
+            if thought is None:
+                return None
+
             return ParsedAction(
-                thought="Final answer provided",
+                thought=thought,
                 action="final_answer",
                 action_input={},
                 raw_text=response,
@@ -743,37 +908,6 @@ class ReactAgent(BaseAgent):
         except Exception as e:
             self.logger.warning(f"Failed to parse response: {e}")
 
-        # Malformed response recovery
-        recovered = self._recover_malformed_response(response)
-        return recovered
-
-    def _recover_malformed_response(self, response: str) -> ParsedAction | None:
-        """
-        Attempt to recover malformed responses.
-
-        Handles:
-        - Missing markers but contains phrases.
-        - Extra text before/after markers
-        - Simple corruption
-        """
-        action_match = re.search(r"(?:action|tool)[:\s]+(\w+)", response, re.IGNORECASE)
-        if action_match:
-            tool_name = action_match.group(1)
-
-            json_match = re.search(r"\{[^}]+\}", response)
-            if json_match:
-                try:
-                    action_input = json.loads(json_match.group())
-                    return ParsedAction(
-                        thought="Recovered from malformed response",
-                        action=tool_name,
-                        action_input=action_input,
-                        raw_text=response,
-                    )
-
-                except json.JSONDecodeError:
-                    pass
-
         return None
 
     def _extract_final_answer(self, response: str) -> str:
@@ -781,16 +915,15 @@ class ReactAgent(BaseAgent):
         answer = ReactMarker.extract(response, ReactMarker.FINAL_ANSWER)
 
         if answer is None:
-            answer = response.strip()
-
-            for marker in ReactMarker:
-                answer = answer.replace(marker.open_tag, "").replace(
-                    marker.close_tag, ""
-                )
-
-            answer = answer.strip()
+            raise AgentError("Missing FINAL_ANSWER marker.")
 
         return answer
+
+    def _format_error_observation(self, error: str) -> str:
+        return (
+            f"Tool/execution error: {error}\n"
+            "Reconsider the previous action and continue if recovery is possible."
+        )
 
     def _format_parse_error(self, response: str) -> str:
         """Format parsing error for feedback."""
@@ -820,31 +953,68 @@ class ReactAgent(BaseAgent):
         Returns:
             Observation string
         """
-        if parsed.is_final_answer:
-            return parsed.thought
-
         # persist in state
-        self.state.add_thought(parsed.thought)
+        self.state.status = AgentStatus.ACTING
+
+        observation = self._execute_tool(parsed.action, parsed.action_input)
+
+        return observation
+
+    # TOOL EXECUTION
+    def _execute_tool(self, tool_name: str, args: dict) -> str:
+        """
+        Execute a tool with validation and error handling.
+
+        Args:
+            tool_name: Name of the tool
+            **kwargs: Tool arguments
+
+        Returns:
+            Tool execution result as string
+
+        Raises:
+            ToolExecutionError: If tool execution fails
+        """
+        tool = self.tools.get(tool_name)
+
+        if tool is None:
+            error = (
+                f"Tool '{tool_name}' not found. Available: {list(self.tools.keys())}"
+            )
+            raise ToolExecutionError(error)
+
+        self.on_tool_start(tool_name, args)
+        start_time = time.perf_counter()
 
         try:
-            start_time = time.perf_counter()
-            result = super()._execute_tool(parsed.action, **parsed.action_input)
+            result = tool.execute(args)
+            result_str = self._stringify_tool_result(result)
+
+        except Exception as exc:
             duration = time.perf_counter() - start_time
+            self.state.record_tool_call(tool_name, args, None, duration)
+            self._track_tool_performance(tool_name, duration)
+            self.on_tool_end(tool_name, str(exc))
+            raise ToolExecutionError(
+                f"Tool '{tool_name}' execution failed: {exc}"
+            ) from exc
 
-            # metrics
-            self._track_tool_performance(parsed.action, duration)
+        duration = time.perf_counter() - start_time
+        self.state.record_tool_call(tool_name, args, result_str, duration)
+        self._track_tool_performance(tool_name, duration)
+        self.on_tool_end(tool_name, result_str)
 
-            self.logger.info(f"Tool {parsed.action} executed in {duration:.2f}s")
+        return result_str
 
+    # HELPERS
+    def _stringify_tool_result(self, result: Any) -> str:
+        if isinstance(result, str):
+            return result
+
+        try:
+            return json.dumps(result, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
             return str(result)
-
-        except ToolExecutionError as e:
-            self.logger.error(f"Tool execution failed: {e}")
-            return f"Error executing {parsed.action}: {str(e)}"
-
-        except Exception as e:
-            self.logger.error(f"Unexpected tool error: {e}")
-            return f"Unexpected error: {str(e)}"
 
     def _track_tool_performance(self, tool_name: str, duration: float) -> None:
         """Track tool execution performance."""
@@ -854,109 +1024,19 @@ class ReactAgent(BaseAgent):
             self._tool_times[tool_name] = []
 
         self._tool_times[tool_name].append(duration)
-        self._step_times.append(duration)
-
-    # STREAMING SUPPORT
-    def process_query_stream(self, query: str) -> Any:
-        """
-        Process query with streaming support.
-
-        Yields:
-            Chunks of the response as they become available
-        """
-        if not query or not query.strip():
-            raise ValueError("Query cannot be empty")
-
-        if not self.streaming_enabled:
-            yield self.process_query(query)
-            return
-
-        self.logger.info(f"Processing query with streaming: {query[:100]}")
-
-        self.state.status = AgentStatus.RUNNING
-        self.state.add_message(MessageRole.USER, query)
-
-        try:
-            for step in range(1, self.max_steps + 1):
-                self.state.start_turn()
-                response = self._reason_stream(step)
-
-                if ReactMarker.has_marker(response, ReactMarker.FINAL_ANSWER):
-                    answer = self._extract_final_answer(response)
-                    self.state.add_message(MessageRole.ASSISTANT, answer)
-                    self.state.end_turn(answer)
-                    self.state.status = AgentStatus.COMPLETED
-                    yield answer
-                    return
-
-                parsed = ParsedAction.from_text(response)
-                if parsed:
-                    self.state.add_message(MessageRole.ASSISTANT, response)
-                    observation = self._execute_action(parsed)
-                    self.state.add_message(
-                        "user", f"<OBSERVATION>{observation}</OBSERVATION>"
-                    )
-                    self.state.reset_errors()
-                    self.state.end_turn(f"Action: {parsed.action}")
-                    yield f"<OBSERVATION>{observation[:100]}...</OBSERVATION>"
-                else:
-                    error_msg = self._format_parse_error(response)
-                    self.state.add_message(MessageRole.USER, error_msg)
-                    self.state.end_turn("Parse Error")
-                    yield "<ERROR>Failed to parse response</ERROR>"
-
-                self.on_step_end(step, "Step completed")
-
-        except Exception as e:
-            self.state.status = AgentStatus.ERROR
-            self.logger.error(f"Streaming query processing failed: {e}", exc_info=True)
-            yield f"<ERROR>{str(e)}</ERROR>"
-
-    def _reason_stream(self, step: int) -> str:
-        """Get streaming reasoning from LLM with retry logic and context."""
-        messages = self._build_reasoning_messages(step)
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                self._log_debug(
-                    f"LLM streaming call {attempt + 1}/{self.max_retries + 1}"
-                )
-                full_response = ""
-
-                # Stream chunks and accumulate
-                for chunk in self.llm.chat_stream(messages):
-                    full_response += chunk
-
-                self._log_debug(f"LLM streaming response:\n{full_response}")
-                return full_response
-
-            except Exception as e:
-                if attempt == self.max_retries:
-                    raise AgentError(
-                        f"LLM streaming call failed after all retries: {e}"
-                    )
-
-                wait_time = 2**attempt  # Exponential backoff
-                self.logger.warning(
-                    f"LLM streaming call failed: {e}, retrying in {wait_time}s"
-                )
-                time.sleep(wait_time)
-
-        raise AgentError("LLM streaming call failed after all retries")
 
     def _log_performance(self, start_time: float) -> None:
         """Log performance metrics."""
-        total_time = time.time() - start_time
+        total_time = time.perf_counter() - start_time
 
         self.logger.info(
             f"Performance Summary:\n"
             f"+ Total time: {total_time:.2f}s\n"
-            f"+ Steps: {self.state.current_turn}\n"
-            f"+ Reasoning time: {self.state.total_reasoning_time:.2f}s\n"
-            f"+ Tool execution time: {self.state.total_tool_time}s\n"
+            f"+ Steps: {self.state.current_step}\n"
+            f"+ Execution time: {self.state.total_execution_time:.2f}s\n"
+            f"+ Tool execution time: {self.state.total_tool_time:.2f}s\n"
             f"+ LLM calls: {self._llm_call_count}\n"
-            f"+ Total tokens: {self.state.total_tokens}\n"
-            f"+ Total executed: {len(self.state.tool_history)}"
+            f"+ Total executed: {len(self.state.tool_calls)}"
         )
 
         if self._tool_times:
@@ -967,40 +1047,11 @@ class ReactAgent(BaseAgent):
             self.logger.info(f"Tools stats: {', '.join(stats)}")
 
     # SERIALIZATION
-    def save_state(self, path: str) -> None:
-        """Save ReAct state with additional performance metadata in a single atomic write."""
-        import os
-
-        state_dict = self.state.to_dict()
-        state_dict.update(
-            {
-                "_agent_type": self.__class__.__name__,
-                "_execution_id": self._execution_id,
-                "_llm_call_count": self._llm_call_count,
-                "_performance": {
-                    "step_times": self._step_times,
-                    "tool_times": self._tool_times,
-                },
-            }
-        )
-
-        directory = os.path.dirname(path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state_dict, f, indent=2)
-            self.logger.info(f"State saved to {path}")
-        except Exception as e:
-            self.logger.error(f"Failed to save state: {e}")
-            raise
-
     def __repr__(self) -> str:
         return (
             f"ReactAgent("
             f"status={self.state.status.value}, "
-            f"steps={self.state.current_turn}/{self.max_steps}, "
+            f"steps={self.state.current_step}/{self.max_steps}, "
             f"tools={len(self.tools)}, "
             f"errors={self.state.consecutive_errors})"
         )
@@ -1037,6 +1088,7 @@ def create_react_agent(
 # USAGE EXAMPLE
 if __name__ == "__main__":
     # Example setup
+    from pydantic import BaseModel, Field
     from ..llm import OpenRouterLLM
 
     # from ..llm.groq import GroqLLM
@@ -1048,6 +1100,9 @@ if __name__ == "__main__":
     llm = OpenRouterLLM(model="dots-studio/dots-3-note-preview:free", config=config)
 
     # Define tools
+    class WeatherToolArgs(BaseModel):
+        city: str = Field(..., description="The city to fetch weather for")
+
     def get_weather(city: str) -> str:
         """Get weather for a city."""
         weather_data = {
@@ -1056,6 +1111,9 @@ if __name__ == "__main__":
             "Tokyo": "Rainy, 22°C",
         }
         return weather_data.get(city, f"Weather data not available for {city}")
+
+    class CalcToolArgs(BaseModel):
+        expression: str = Field(..., description="Mathematical operation expression")
 
     def calculate(expression: str) -> float:
         """Safe mathematical calculation."""
@@ -1069,14 +1127,14 @@ if __name__ == "__main__":
     weather_tool = Tool(
         name="get_weather",
         description="Get current weather for a city. Input: {{'city': 'city_name'}}",
-        parameters={"city": str},
+        args_model=WeatherToolArgs,
         fn=get_weather,
     )
 
     calc_tool = Tool(
         name="calculate",
         description="Perform mathematical calculations. Input: {{'expression': '2+2'}}",
-        parameters={"expression": str},
+        args_model=CalcToolArgs,
         fn=calculate,
     )
 
