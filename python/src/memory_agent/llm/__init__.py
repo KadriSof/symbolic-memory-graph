@@ -22,7 +22,7 @@ except ImportError as e:
     GroqLLM = None
 
 try:
-    from .llama_cpp import LlamaCppLLM
+    from .llamacpp import LlamaCppLLM
 except ImportError as e:
     logger.debug(f"LlamaCppLLM not available: {e}")
     LlamaCppLLM = None
@@ -38,5 +38,6 @@ __all__ = [
     "GenerationConfig",
     "GroqLLM",
     "LlamaCppLLM",
+    "OpenRouterLLM",
     "summarize_conversation",
 ]
