@@ -8,13 +8,14 @@ Provides agent implementations:
 """
 
 from .base import BaseAgent
-from .react_agent import ReactAgent, ReactState
-from .cogito_agent import CogitoAgent, CogitoState
+from .react import ReactAgent, ReactState, ReactStateProtocol
+from .cogito.agent import CogitoAgent, CogitoState
 
 __all__ = [
     "BaseAgent",
     "ReactAgent",
     "ReactState",
+    "ReactStateProtocol",
     "CogitoAgent",
     "CogitoState",
 ]

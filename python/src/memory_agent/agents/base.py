@@ -61,11 +61,19 @@ class AgentStatus(str, Enum):
 
     IDLE = "idle"
     RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
+
+    # REACT STATUS
     THINKING = "thinking"
     ACTING = "acting"
     OBSERVING = "observing"
-    COMPLETED = "completed"
-    ERROR = "error"
+
+    # COGITO STATUS
+    PERCEIVE = "perceive"
+    RECALL = "recall"
+    ORIENT = "orient"
+    CONSOLIDATE = "consolidate"
 
 
 # Type aliases:
@@ -78,9 +86,9 @@ StateDict = dict[str, Any]
 class BaseState:
     """
     Core state shared by all agent implementations.
-    Immutable-safe with controlled mutation methods.
 
     Attributes:
+        current_turn: Conversation turn index
         messages: Conversation history with token tracking
         metadata: Arbitrary key-value store for extensions
         status: Current execution status
@@ -88,6 +96,7 @@ class BaseState:
     """
 
     # Core conversation
+    current_turn: int = 0
     messages: deque = field(default_factory=deque)
 
     # Metadata
@@ -178,12 +187,13 @@ class BaseState:
             "messages": list(self.messages),
             "metadata": self.metadata,
             "status": self.status.value,
+            "max_messages": self.max_messages,
         }
 
     @classmethod
     def from_dict(cls, data: StateDict) -> "BaseState":
         """Deserialize state from dictionary."""
-        state = cls()
+        state = cls(max_messages=data.get("max_messages", 50))
 
         state.messages = deque(data.get("messages", []), maxlen=state.max_messages)
         state.metadata = data.get("metadata", {})
@@ -292,11 +302,10 @@ class BaseAgent(ABC):
     @property
     def is_running(self) -> bool:
         """Check if agent is currently executing."""
-        return self.state.status in {
-            AgentStatus.RUNNING,
-            AgentStatus.THINKING,
-            AgentStatus.ACTING,
-            AgentStatus.OBSERVING,
+        return self.state.status not in {
+            AgentStatus.IDLE,
+            AgentStatus.COMPLETED,
+            AgentStatus.ERROR,
         }
 
     # ABSTRACT METHODS
@@ -449,7 +458,7 @@ class BaseAgent(ABC):
         """Prepare messages for LLM call."""
         messages = [
             {"role": MessageRole.SYSTEM.value, "content": self._get_system_prompt()},
-            *self.state.retrieve_messages(),
+            *self.state.retrieve_messages(limit=8),
         ]
 
         return messages
