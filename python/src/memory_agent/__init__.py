@@ -12,12 +12,6 @@ Components:
 - Tools: Tool abstraction
 """
 
-# Core Types
-from .core import (
-    # State
-    AgentState,
-)
-
 # LLM
 from .llm import BaseLLM, GenerationConfig, GroqLLM, LlamaCppLLM
 
@@ -39,7 +33,6 @@ __version__ = "0.1.0"
 
 # Public API
 __all__ = [
-    "AgentState",
     # LLM
     "BaseLLM",
     "GenerationConfig",

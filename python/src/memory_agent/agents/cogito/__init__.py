@@ -1,3 +1,4 @@
+from .state import CogitoState
 from .memory import WorkingMemory, SymbolicMemory, EpisodicMemory
 from .orchestrator import (
     ProcedureNode,
@@ -5,11 +6,8 @@ from .orchestrator import (
     WorkflowOrchestrator,
 )
 from .types import (
-    Entity,
-    Relation,
     KnowledgeDelta,
     ComprehensionResult,
-    KnowledgeDelta,
     ReasoningResult,
 )
 from .schemas import (
@@ -34,10 +32,7 @@ __all__ = [
     "ProcedureNode",
     "TransitionEdge",
     "WorkflowOrchestrator",
-    "CogitoStatus"
     # Types
-    "Entity",
-    "Relation",
     "KnowledgeDelta",
     "ComprehensionResult",
     "ReasoningResult",
