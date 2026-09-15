@@ -57,9 +57,37 @@ class BaseLLM(ABC):
             log_errors=True,
         )
 
+    @staticmethod
+    def _sanitize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Sanitize messages to only include keys accepted by LLM APIs (Groq/OpenAI).
+
+        Removes internal state metadata like 'timestamp', 'tokens', 'step', etc.
+        that were added by BaseState.add_message() for tracking purposes.
+
+        Args:
+            messages: List of message dictionaries from agent state
+
+        Returns:
+            List of cleaned message dictionaries safe for LLM API calls
+        """
+        allowed_keys = {"role", "content", "name", "tool_calls", "tool_call_id"}
+
+        sanitized = []
+        for msg in messages:
+            clean_msg = {k: v for k, v in msg.items() if k in allowed_keys}
+            sanitized.append(clean_msg)
+
+        return sanitized
+
     @abstractmethod
     def chat(self, messages: Messages) -> str:
         """Generate a chat completion."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def chat_stream(self, messages: Messages) -> str:
+        """Generate a chat stream."""
         raise NotImplementedError
 
     @abstractmethod
@@ -84,6 +112,8 @@ class BaseLLM(ABC):
 
         Uses the robust JSON parser we already built.
         """
+        messages = self._sanitize_messages(messages)
+
         try:
             # Try native structured output first
             try:
@@ -93,7 +123,9 @@ class BaseLLM(ABC):
                 # Fallback for Pydantic v1 (if there are anyone there still using it --)
                 schema = model.schema() if hasattr(model, "schema") else {}  # type: ignore
 
+            print(f"[BaseLLM:get_structured] messages:\n----\n{messages}\n----\n")
             raw = self.structured_output(messages, schema, **kwargs)
+            print(f"[BaseLLM:get_structured] raw output:\n----\n{raw}\n----\n")
             return self._parser.parse_dict(raw, model)
 
         except NotImplementedError:
@@ -103,7 +135,9 @@ class BaseLLM(ABC):
             return self._parser.parse(response, model)
 
         except Exception as e:
-            logger.error(f"Structured output failed: {e}")
+            logger.error(
+                f"Structured output failed [{type(e).__name__}]:\n----{e}\n----"
+            )
             return None
 
     def with_config(self, **kwargs: Any) -> "BaseLLM":

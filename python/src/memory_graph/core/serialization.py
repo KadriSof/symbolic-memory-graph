@@ -72,6 +72,78 @@ class GraphSerializer:
         return _cpp_from_binary(binary_data)
 
     @staticmethod
+    def to_binary(graph: MemoryGraph, compress: bool = True) -> bytes:
+        """
+        Convert graph to binary bytes (convenience wrapper).
+
+        Args:
+            graph: The MemoryGraph to serialize.
+            compress: Whether to compress the binary data.
+
+        Returns:
+            Binary data as bytes.
+
+        Raises:
+            TypeError: If the C++ function returns an unsupported type.
+        """
+        options = SerializationOptions()
+        options.include_metadata = True
+        options.include_edges = True
+        options.compression = CompressionType.ZLIB if compress else CompressionType.NONE
+        options.version = 1
+
+        result = _cpp_to_binary(graph, options)
+
+        # Ensure we return bytes, not a list
+        if isinstance(result, list):
+            return bytes(result)
+        if isinstance(result, bytearray):
+            return bytes(result)
+        if isinstance(result, memoryview):
+            return bytes(result)
+        if isinstance(result, bytes):
+            return result
+
+        raise TypeError(f"Unexpected type from C++ to_binary: {type(result)}")
+
+    @staticmethod
+    def from_binary(data: bytes) -> MemoryGraph:
+        """
+        Convert binary bytes to graph.
+
+        Args:
+            data: Binary data to deserialize.
+
+        Returns:
+            Reconstructed MemoryGraph.
+
+        Raises:
+            ValueError: If the data is invalid or corrupted.
+        """
+        # Ensure we have bytes
+        if isinstance(data, list):
+            data = bytes(data)
+        elif isinstance(data, bytearray):
+            data = bytes(data)
+        elif isinstance(data, memoryview):
+            data = bytes(data)
+        elif not isinstance(data, bytes):
+            raise TypeError(f"Expected bytes-like object, got {type(data)}")
+
+        # Convert bytes to list for compatibility
+        data_list = list(data)
+
+        # Validate
+        try:
+            if not _cpp_is_valid_format(data_list):
+                raise ValueError("Invalid or corrupted binary data")
+        except TypeError:
+            if not _cpp_is_valid_format(data):
+                raise ValueError("Invalid or corrupted binary data")
+
+        return _cpp_from_binary(data_list)
+
+    @staticmethod
     def compute_delta(before: MemoryGraph, after: MemoryGraph) -> Dict[str, Any]:
         """
         Compute the difference between two graph states.
