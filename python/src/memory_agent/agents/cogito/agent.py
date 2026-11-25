@@ -37,7 +37,7 @@ class CogitoAgent(BaseAgent):
         self.symbolic_memory = SymbolicMemory(graph=knowledge_graph)
         self.episodic_memory = EpisodicMemory(graph=episodic_memory)
 
-        self.react_engine = ReactEngine(tools=self.tools)
+        self.react_engine = ReactEngine(tools=self.tools, logger=self.logger)
         self.orchestrator = WorkflowOrchestrator(
             entry_node_id="comprehend", max_steps=50, max_history=50
         )
@@ -885,106 +885,3 @@ class CogitoAgent(BaseAgent):
             f"tools={len(self.tools)}"
             ")"
         )
-
-
-# USAGE EXAMPLE & FUNCTIONAL VERIFICATION
-if __name__ == "__main__":
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-    try:
-        from memory_agent.llm import OpenRouterLLM
-        from memory_agent.llm import LlamaCppLLM
-        from memory_agent.tools.base import Tool
-        from memory_agent.llm.base import GenerationConfig
-        from pydantic import BaseModel, Field
-    except ImportError:
-        from ...llm import OpenRouterLLM
-        from ...tools.base import Tool
-        from ...llm.base import GenerationConfig
-
-    model_path = os.path.expanduser("~/models/granite-4.1-3b-Q4_K_M.gguf")
-
-    config = GenerationConfig(max_tokens=2048, temperature=0.2)
-    llm = OpenRouterLLM(model="dots-studio/dots-3-note-preview:free", config=config)
-    llm = LlamaCppLLM(
-        model_path=model_path,
-        config=config,
-    )
-
-    # Define tools
-    class WeatherToolArgs(BaseModel):
-        city: str = Field(..., description="The city to fetch weather for")
-
-    def get_weather(city: str) -> str:
-        """Get weather for a city."""
-        weather_data = {
-            "Paris": "Sunny, 25°C",
-            "London": "Cloudy, 18°C",
-            "Tokyo": "Rainy, 22°C",
-        }
-        return weather_data.get(city, f"Weather data not available for {city}")
-
-    class CalcToolArgs(BaseModel):
-        expression: str = Field(..., description="Mathematical operation expression")
-
-    def calculate(expression: str) -> float:
-        """Safe mathematical calculation."""
-        # Simple safe eval
-        allowed = set("0123456789+-*/(). ")
-        if not all(c in allowed for c in expression):
-            raise ValueError("Invalid characters in expression")
-        return eval(expression)
-
-    # Create tools
-    weather_tool = Tool(
-        name="get_weather",
-        description="Get current weather for a city. Input: {{'city': 'city_name'}}",
-        args_model=WeatherToolArgs,
-        fn=get_weather,
-    )
-
-    calc_tool = Tool(
-        name="calculate",
-        description="Perform mathematical calculations. Input: {{'expression': '2+2'}}",
-        args_model=CalcToolArgs,
-        fn=calculate,
-    )
-
-    print("⚡ COGITO: Mobile Suit Activation Sequence...")
-    agent = CogitoAgent(
-        llm=llm,
-        tools=[weather_tool, calc_tool],
-        config={"max_steps": 10, "max_retries": 2, "debug": True},
-    )
-
-    print("\n🚀 Cogito Activated!\n" + "=" * 60)
-
-    for i, query in enumerate(
-        ["What's the weather in Tokyo?", "Tell me about the lore of the Witcher."], 1
-    ):
-        print(f"\n📝 Query {i}: {query}\n" + "-" * 40)
-        try:
-            response = agent.process_query(query)
-            print(f"🤖 Response: {response}")
-            if i == 1:
-                stats = agent.get_memory_stats()
-                print(
-                    f"\n📊 Memory Stats:\n   Symbolic: {stats['symbolic_memory']['nodes']} nodes, {stats['symbolic_memory']['edges']} edges\n   Episodic: {stats['episodic_memory']['turns']} turns\n   Orchestrator Steps: {stats['orchestrator']['execution_count']}"
-                )
-        except Exception as e:
-            print(f"❌ Error: {e}")
-
-    print("\n" + "=" * 60 + "\n💫 Cogito Mobile Suit Mission Complete!")
-
-    test_path = "test_cogito_state.json"
-    agent.save_state(test_path)
-    agent2 = CogitoAgent(llm=llm, tools=[weather_tool, calc_tool])
-    agent2.load_state(test_path)
-    print(
-        f"✅ State loaded successfully. Episodic turns restored: {len(agent2.episodic_memory)}"
-    )
-    if os.path.exists(test_path):
-        os.remove(test_path)
