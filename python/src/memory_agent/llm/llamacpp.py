@@ -12,14 +12,13 @@ Method Naming Convention:
 - chat_http, chat_stream_http, structured_output_http, systemone_http: Uses `httpx` to communicate with `llama-server`.
 """
 
-from __future__ import annotations
-
-import json
-import logging
 import os
+import json
+import httpx
+import logging
+
 from typing import Any, Generator
 
-import httpx
 from dotenv import load_dotenv
 from llama_cpp import Llama, LlamaGrammar
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -129,10 +128,7 @@ class LlamaCppLLM(BaseLLM):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    # =========================================================================
     # LOCAL INFERENCE METHODS
-    # =========================================================================
-
     def _require_local(self) -> Llama:
         client = self.client
         if client is None:
@@ -150,7 +146,7 @@ class LlamaCppLLM(BaseLLM):
         client = self._require_local()
         try:
             response = client.create_chat_completion(
-                messages=messages,
+                messages=messages,  # type: ignore
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 top_p=self.config.top_p,
@@ -160,7 +156,7 @@ class LlamaCppLLM(BaseLLM):
                 stop=self._stop_tokens,
                 **kwargs,
             )
-            return response["choices"][0]["message"]["content"] or ""
+            return response["choices"][0]["message"]["content"] or ""  # type: ignore
         except Exception as e:
             self.logger.error(f"Local chat generation failed: {str(e)}")
             raise
@@ -175,7 +171,7 @@ class LlamaCppLLM(BaseLLM):
         client = self._require_local()
         try:
             stream = client.create_chat_completion(
-                messages=messages,
+                messages=messages,  # type: ignore
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 top_p=self.config.top_p,
@@ -187,7 +183,7 @@ class LlamaCppLLM(BaseLLM):
                 **kwargs,
             )
             for chunk in stream:
-                delta = chunk["choices"][0].get("delta", {})
+                delta = chunk["choices"][0].get("delta", {})  # type: ignore
                 content = delta.get("content")
                 if content:
                     yield content
@@ -245,12 +241,12 @@ class LlamaCppLLM(BaseLLM):
             )
 
             if grammar is not None:
-                completion_kwargs["grammar"] = grammar
+                completion_kwargs["grammar"] = grammar  # type: ignore
             else:
-                completion_kwargs["response_format"] = {"type": "json_object"}
+                completion_kwargs["response_format"] = {"type": "json_object"}  # type: ignore
 
-            response = client.create_chat_completion(**completion_kwargs)
-            content = response["choices"][0]["message"]["content"] or ""
+            response = client.create_chat_completion(**completion_kwargs)  # type: ignore
+            content = response["choices"][0]["message"]["content"] or ""  # type: ignore
 
             if not content:
                 raise ValueError("Empty response from Llama.cpp")
@@ -270,10 +266,7 @@ class LlamaCppLLM(BaseLLM):
             )
             raise
 
-    # =========================================================================
     # HTTP LLAMA-SERVER METHODS
-    # =========================================================================
-
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
     )
@@ -429,10 +422,7 @@ class LlamaCppLLM(BaseLLM):
         response.raise_for_status()
         return response.json()
 
-    # =========================================================================
     # INTERNAL HELPERS
-    # =========================================================================
-
     def _detect_chat_format_from_metadata(self) -> str | None:
         try:
             metadata = getattr(self.client, "metadata", {}) or {}
@@ -470,289 +460,3 @@ class LlamaCppLLM(BaseLLM):
             f"base_url={self.base_url or 'None'} "
             f"chat_format={self._chat_format} config={self.config}>"
         )
-
-
-# ==============================================================================
-# USAGE EXAMPLE & ROUTING LOGIC TEST HARNESS
-# Benchmarks System One routing against a running llama-server endpoint via
-# the native /v1/systemone decision model endpoint.
-# ==============================================================================
-if __name__ == "__main__":
-    import argparse
-    import time
-    from typing import Any
-
-    DESC_REPLY = (
-        "Answer directly from memory or stable general knowledge; no tool is needed."
-    )
-    DESC_REACT = "Use a listed available tool that can obtain the required information."
-    DESC_REQUEST = "Ask the user for essential missing information that no available tool can obtain."
-
-    ROUTE_DESCS = {"REPLY": DESC_REPLY, "REACT": DESC_REACT, "REQUEST": DESC_REQUEST}
-
-    INSTRUCTION = (
-        "Choose exactly the best route for handling the request now, "
-        "considering the request, relevant memory, and available tools. "
-        "REPLY means answer directly from memory or stable general knowledge. "
-        "REACT means a listed available tool is required and can fulfill the "
-        "request. REQUEST means essential information is missing and no "
-        "available tool can obtain it."
-    )
-
-    # id | expected | user request | relevant memory | available tools
-    CASES = [
-        (
-            "R01",
-            "REPLY",
-            "What is the capital of France?",
-            "The capital of France is Paris.",
-            "None",
-        ),
-        (
-            "R02",
-            "REPLY",
-            "What does BFS stand for in graph theory?",
-            "BFS stands for Breadth-First Search.",
-            "None",
-        ),
-        (
-            "R03",
-            "REPLY",
-            "What is the purpose of a hash table?",
-            "A hash table stores key-value pairs.",
-            "None",
-        ),
-        (
-            "Q01",
-            "REQUEST",
-            "Why did my program crash?",
-            "No source code or error message provided.",
-            "None",
-        ),
-        (
-            "Q02",
-            "REQUEST",
-            "Which of my two implementations is faster?",
-            "Neither implementation provided.",
-            "None",
-        ),
-        (
-            "Q03",
-            "REQUEST",
-            "What did I name the function in my unshared source file?",
-            "The source file is not present.",
-            "None",
-        ),
-        (
-            "T01",
-            "REACT",
-            "What is the weather in Tunis right now?",
-            "No current weather information available.",
-            "weather - returns current weather",
-        ),
-        (
-            "T02",
-            "REACT",
-            "Search the web for the latest release of the Linux kernel.",
-            "No information available.",
-            "web_search - searches the live web",
-        ),
-        (
-            "T03",
-            "REACT",
-            "Read the contents of config.toml in the current project.",
-            "The file contents are not available.",
-            "file_read - reads a local file",
-        ),
-    ]
-
-    ORDERS = [
-        ("REPLY", "REACT", "REQUEST"),
-        ("REQUEST", "REPLY", "REACT"),
-        ("REACT", "REQUEST", "REPLY"),
-    ]
-
-    def normalize_choice(raw: str) -> str | None:
-        if not raw:
-            return None
-        if raw == "REPLY" or raw == DESC_REPLY or raw.startswith("Answer directly"):
-            return "REPLY"
-        if (
-            raw == "REACT"
-            or raw == DESC_REACT
-            or raw.startswith("Use a listed available tool")
-        ):
-            return "REACT"
-        if raw == "REQUEST" or raw == DESC_REQUEST or raw.startswith("Ask the user"):
-            return "REQUEST"
-        return None
-
-    def run_case_routing(llm: "LlamaCppLLM", state: str) -> dict[str, Any]:
-        """
-        Run one case against the /v1/systemone endpoint three times (cyclic option
-        permutations) and return the majority route plus per-route vote counts.
-        """
-        votes = {"REPLY": 0, "REACT": 0, "REQUEST": 0}
-        round_log: list[str] = []
-        valid_rounds = 0
-
-        for order in ORDERS:
-            criteria = {label: ROUTE_DESCS[label] for label in order}
-            questions = {
-                "decision": {
-                    "type": "choice",
-                    "instructions": INSTRUCTION,
-                    "criteria": criteria,
-                }
-            }
-            try:
-                # Use the native /v1/systemone endpoint designed for decision models
-                result = llm.systemone_http(state=state, questions=questions)
-                answer = result["answers"]["decision"]
-            except Exception as e:
-                round_log.append(f"  [{'/'.join(order)}] ERROR: {e}")
-                continue
-
-            mapped = normalize_choice(answer.get("choice", ""))
-            if mapped is None:
-                round_log.append(
-                    f"  [{'/'.join(order)}] ERROR: unrecognized choice: {answer.get('choice', '')!r}"
-                )
-                continue
-
-            votes[mapped] += 1
-            valid_rounds += 1
-
-            # Log probabilities if the decision model provides them
-            probs = answer.get("probabilities", {})
-            prob_str = " ".join([f"{k}={v:.3f}" for k, v in probs.items()])
-            round_log.append(f"  [{'/'.join(order)}] choice={mapped} ({prob_str})")
-
-        tie_break = ("REPLY", "REACT", "REQUEST")
-        route = (
-            max(tie_break, key=lambda r: (votes[r], -tie_break.index(r)))
-            if valid_rounds > 0
-            else "NONE"
-        )
-
-        return {
-            "valid": 1 if valid_rounds > 0 else 0,
-            "route": route,
-            "votes": votes,
-            "log": "\n".join(round_log) + "\n",
-        }
-
-    # =====================================================================
-    # CLI & benchmark run
-    # =====================================================================
-
-    parser = argparse.ArgumentParser(
-        description="System One Cogito Routing Benchmark (llama-server HTTP)"
-    )
-    parser.add_argument(
-        "--base-url",
-        type=str,
-        default=os.getenv("LLAMA_SERVER_URL", "http://127.0.0.1:8080"),
-        help="Base URL of the running llama-server (default: http://127.0.0.1:8080)",
-    )
-    parser.add_argument(
-        "--api-key",
-        type=str,
-        default=os.getenv("LLAMA_SERVER_API_KEY", ""),
-        help="Optional API key",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="laya",
-        help="Model name reported in the HTTP payload",
-    )
-    parser.add_argument(
-        "--temperature", type=float, default=0.0, help="Sampling temperature"
-    )
-    parser.add_argument(
-        "--max-tokens", type=int, default=128, help="Max tokens per request"
-    )
-    args = parser.parse_args()
-
-    # HTTP-only LlamaCppLLM: no local GGUF is loaded; all inference goes to the llama-server endpoint.
-    llm = LlamaCppLLM(
-        base_url=args.base_url,
-        api_key=args.api_key or None,
-        config=GenerationConfig(
-            temperature=args.temperature, max_tokens=args.max_tokens
-        ),
-    )
-    llm.model_name = args.model
-
-    # Health check, mirroring the bash script's pre-flight probe.
-    try:
-        health = llm.http_client.get(f"{llm.base_url}/health")
-        health.raise_for_status()
-    except Exception as e:
-        raise SystemExit(f"ERROR: llama-server unavailable at {llm.base_url}\n  {e}")
-
-    print("=" * 60)
-    print(" SYSTEM ONE — COGITO ROUTING BENCHMARK")
-    print(" Method: cyclic option rotation; majority vote vs ground truth")
-    print("=" * 60)
-    print(f"Endpoint: {llm.base_url}/v1/systemone")
-    print("Cases:    9 (3 per expected route)")
-    print("Rounds:   3 calls per case (up to 27 requests)\n")
-
-    total = correct = valid = failed = 0
-    per_route = {"REPLY": [0, 0], "REQUEST": [0, 0], "REACT": [0, 0]}
-
-    for case_id, expected, task, memory, available_tools in CASES:
-        state = f"USER REQUEST:\n{task}\n\nAVAILABLE TOOLS:\n{available_tools}\n\nRELEVANT MEMORY:\n{memory}"
-
-        start_ms = time.perf_counter()
-        result = run_case_routing(llm, state)
-        latency_ms = int((time.perf_counter() - start_ms) * 1000)
-
-        total += 1
-        per_route[expected][1] += 1
-
-        if result["valid"] == 0:
-            failed += 1
-            print(
-                f"{case_id:<4} | INVALID | expected={expected:<7} actual={'NONE':<7} | {latency_ms:5d} ms"
-            )
-            print(result["log"], end="")
-            continue
-
-        valid += 1
-        actual = result["route"]
-        if actual == expected:
-            correct += 1
-            per_route[expected][0] += 1
-            status = "PASS"
-        else:
-            status = "MISS"
-
-        print(
-            f"{case_id:<4} | {status:<7} | expected={expected:<7} actual={actual:<7} | {latency_ms:5d} ms"
-        )
-        votes = result["votes"]
-        print(
-            f"     votes     REPLY={votes['REPLY']}  REACT={votes['REACT']}  REQUEST={votes['REQUEST']}"
-        )
-        print(result["log"], end="")
-
-    print("\n" + "=" * 60)
-    print(" SUMMARY")
-    print("=" * 60)
-    if total:
-        print(f"End-to-end accuracy: {100 * correct / total:.1f}% ({correct}/{total})")
-        print(f"Valid-response rate:  {100 * valid / total:.1f}% ({valid}/{total})")
-    if valid > 0:
-        print(
-            f"Conditional accuracy:  {100 * correct / valid:.1f}% ({correct}/{valid} valid cases)"
-        )
-
-    for route in ("REPLY", "REQUEST", "REACT"):
-        hits, cases = per_route[route]
-        if cases > 0:
-            print(f"{route:<7} accuracy: {100 * hits / cases:.1f}% ({hits}/{cases})")
-
-    print(f"\nCases: {total} | Valid: {valid} | Invalid: {failed}")
