@@ -27,9 +27,12 @@ class ReactMarker(str, Enum):
 
     @classmethod
     def extract(cls, text: str, marker: "ReactMarker") -> str | None:
-        """Extract content between markers."""
+        """
+        Extract content between markers.
+        (tolerates missing closing tags)
+        """
         pattern = (
-            rf"{re.escape(marker.open_tag)}" rf"(.*?)" rf"{re.escape(marker.close_tag)}"
+            rf"{re.escape(marker.open_tag)}(.*?)(?:{re.escape(marker.close_tag)}|\Z)"
         )
         match = re.search(pattern, text, re.DOTALL)
         return match.group(1).strip() if match else None
