@@ -18,7 +18,6 @@ void init_node(py::module_ &m) {
       .def("get_id", &memory_graph::Node::getId)
       .def("get_label", &memory_graph::Node::getLabel)
       .def("get_metadata", &memory_graph::Node::getMetadata)
-      .def("get_connections", &memory_graph::Node::getConnections)
       .def("set_label", &memory_graph::Node::setLabel)
       .def("set_metadata", &memory_graph::Node::setMetadata)
       .def("update_metadata", &memory_graph::Node::updateMetadata)
