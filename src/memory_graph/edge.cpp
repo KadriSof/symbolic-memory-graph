@@ -23,14 +23,11 @@ float Edge::getWeight() const { return weight_; }
 const nlohmann::json &Edge::getMetadata() const { return metadata_; }
 
 void Edge::setLabel(const std::string &label) { label_ = label; }
-
 void Edge::setWeight(float weight) {
   validateWeight(weight);
   weight_ = weight;
 }
-
 void Edge::setMetadata(const nlohmann::json &metadata) { metadata_ = metadata; }
-
 void Edge::updateMetadata(const std::string &key, const nlohmann::json &value) {
   metadata_[key] = value;
 }
@@ -40,6 +37,8 @@ void Edge::validateWeight(float weight) {
     throw std::invalid_argument("Edge weight must be between 0.0 and 1.0.");
   }
 }
+
+bool Edge::isGroupEdge() const { return isGroupEdge_; }
 
 nlohmann::json Edge::toJson() const {
   nlohmann::json edgeJson;
@@ -72,11 +71,9 @@ nlohmann::json Edge::toJson() const {
 Edge Edge::fromJson(const nlohmann::json &edgeJson) {
   std::string id = edgeJson.at("id").get<std::string>();
   std::string label = edgeJson.at("label").get<std::string>();
-
   std::string typeStr = edgeJson.at("type").get<std::string>();
   EdgeType type =
       (typeStr == "SYMMETRIC") ? EdgeType::SYMMETRIC : EdgeType::ASYMMETRIC;
-
   float weight = edgeJson.value("weight", 1.0f);
 
   nlohmann::json metadata;
@@ -86,16 +83,19 @@ Edge Edge::fromJson(const nlohmann::json &edgeJson) {
     metadata = nlohmann::json::object();
   }
 
+  bool isGroupEdge = edgeJson.value("isGroupEdge", false);
+
   // Parse connections...
   Connections connections;
-  bool isGroupEdge = false;
 
   if (edgeJson["connections"]["type"] == "symmetric") {
     auto nodes =
         edgeJson["connections"]["nodes"].get<std::vector<std::string>>();
     SymmetricConnections conn_set(nodes.begin(), nodes.end());
     connections = conn_set;
-    isGroupEdge = true;
+    if (nodes.size() > 2) {
+      isGroupEdge = true;
+    }
   } else {
     std::string source = edgeJson["connections"]["source"];
     std::string target = edgeJson["connections"]["target"];
