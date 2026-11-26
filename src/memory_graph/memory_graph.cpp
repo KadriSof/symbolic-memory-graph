@@ -18,7 +18,12 @@
 namespace memory_graph {
 
 MemoryGraph::MemoryGraph(const nlohmann::json &metadata)
-    : metadata_(metadata.is_object() ? metadata : nlohmann::json::object()) {}
+    : metadata_(metadata.is_object() ? metadata : nlohmann::json::object()),
+      mode_(GraphMode::SYMBOLIC), // Default to SYMBOLIC for agentic use
+      adjacencyDirty_(true) {}
+
+GraphMode MemoryGraph::getMode() const { return mode_; }
+void MemoryGraph::setMode(GraphMode mode) { mode_ = mode; }
 
 void MemoryGraph::addNode(const Node &node) {
   if (nodes_.find(node.getId()) != nodes_.end()) {
@@ -79,6 +84,10 @@ std::vector<Node> MemoryGraph::getNodes() const {
   return result;
 }
 
+const std::unordered_map<std::string, Node> &MemoryGraph::getNodesRef() const {
+  return nodes_;
+}
+
 void MemoryGraph::addEdge(const Edge &edge) {
   if (edges_.find(edge.getId()) != edges_.end()) {
     throw DuplicateIdError("Edge with ID '" + edge.getId() +
@@ -104,12 +113,6 @@ void MemoryGraph::addEdge(const Edge &edge) {
       }
     }
 
-    auto it = conn_set.begin();
-    std::string node1 = *it;
-    std::string node2 = *(++it);
-    nodes_.at(node1).addConnection(node2);
-    nodes_.at(node2).addConnection(node1);
-
     // Handle asymetric connections
   } else {
     const auto &conn_pair =
@@ -120,8 +123,6 @@ void MemoryGraph::addEdge(const Edge &edge) {
       throw InvalidConnectionError(
           !hasNode(conn_pair.first) ? conn_pair.first : conn_pair.second);
     }
-
-    nodes_.at(conn_pair.first).addConnection(conn_pair.second);
   }
 
   edges_.emplace(edge.getId(), edge);
@@ -175,18 +176,8 @@ void MemoryGraph::addGroupEdge(const std::string &id, const std::string &label,
   SymmetricConnections conn(nodeIds);
   Edge groupEdge(id, label, EdgeType::SYMMETRIC, conn, weight, metadata, true);
 
-  // This ensures Node::connections_ is populated for serialization
-  std::vector<std::string> nodes(nodeIds.begin(), nodeIds.end());
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    for (size_t j = i + 1; j < nodes.size(); ++j) {
-      nodes_.at(nodes[i]).addConnection(nodes[j]);
-      nodes_.at(nodes[j]).addConnection(nodes[i]);
-    }
-  }
-
   // 6. Store the edge
   edges_.emplace(id, groupEdge);
-
   invalidateCache();
 }
 
@@ -197,24 +188,6 @@ bool MemoryGraph::hasEdge(const std::string &edgeId) const {
 void MemoryGraph::removeEdge(const std::string &edgeId) {
   if (!hasEdge(edgeId)) {
     throw EdgeNotFoundError(edgeId);
-  }
-
-  const Edge &edge = edges_.at(edgeId);
-  if (edge.getType() == EdgeType::SYMMETRIC) {
-    const auto &conn_set =
-        std::get<SymmetricConnections>(edge.getConnections());
-
-    std::vector<std::string> nodes(conn_set.begin(), conn_set.end());
-    for (size_t i = 0; i < nodes.size(); ++i) {
-      for (size_t j = i + 1; j < nodes.size(); ++j) {
-        nodes_.at(nodes[i]).removeConnection(nodes[j]);
-        nodes_.at(nodes[j]).removeConnection(nodes[i]);
-      }
-    }
-  } else {
-    const auto &conn_pair =
-        std::get<AsymmetricConnections>(edge.getConnections());
-    nodes_.at(conn_pair.first).removeConnection(conn_pair.second);
   }
 
   edges_.erase(edgeId);
@@ -247,6 +220,10 @@ std::vector<Edge> MemoryGraph::getGroupEdges() const {
   return result;
 }
 
+const std::unordered_map<std::string, Edge> &MemoryGraph::getEdgesRef() const {
+  return edges_;
+}
+
 std::vector<Node> MemoryGraph::getNeighbors(const std::string &nodeId) const {
   if (!hasNode(nodeId)) {
     throw NodeNotFoundError(nodeId);
@@ -254,11 +231,15 @@ std::vector<Node> MemoryGraph::getNeighbors(const std::string &nodeId) const {
 
   const auto &adjList = getAdjacencyList();
   std::vector<Node> neighbors;
+  std::unordered_set<std::string> seen;
 
   auto it = adjList.find(nodeId);
   if (it != adjList.end()) {
-    for (const auto &[neighborId, isSymmetric] : it->second) {
-      neighbors.push_back(nodes_.at(neighborId));
+    for (const auto &entry : it->second) {
+      if (seen.find(entry.neighbor_id) == seen.end()) {
+        seen.insert(entry.neighbor_id);
+        neighbors.push_back(nodes_.at(entry.neighbor_id));
+      }
     }
   }
 
@@ -291,13 +272,24 @@ nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
   }
 
   const auto &adjList = getAdjacencyList();
-
   nlohmann::json result;
-  std::unordered_set<std::string> visited;
-  std::queue<std::pair<std::string, int>> queue; // (node_id, depth)
+  result["nodes"] = nlohmann::json::array();
+  result["edges"] = nlohmann::json::array();
 
+  std::unordered_set<std::string> visitedNodes;
+  std::unordered_set<std::string> visitedEdges;
+
+  // Mark as visited when adding to queue
+  std::queue<std::pair<std::string, int>> queue;
   queue.push({nodeId, 0});
-  result["depth_0"] = nlohmann::json::array({nodeId});
+  visitedNodes.insert(nodeId);
+
+  // Add start node with depth 0
+  const Node &startNode = nodes_.at(nodeId);
+  result["nodes"].push_back({{"id", startNode.getId()},
+                             {"label", startNode.getLabel()},
+                             {"metadata", startNode.getMetadata()},
+                             {"depth", 0}});
 
   while (!queue.empty()) {
     auto [currentId, depth] = queue.front();
@@ -307,63 +299,52 @@ nlohmann::json MemoryGraph::query(const std::string &nodeId, int maxDepth,
       continue;
     }
 
-    if (visited.find(currentId) != visited.end()) {
+    auto it = adjList.find(currentId);
+    if (it == adjList.end()) {
       continue;
     }
 
-    visited.insert(currentId);
+    // Explore neighbors (edge_id from adjacency entry for O(1) weight lookup)
+    for (const auto &entry : it->second) {
+      const std::string &neighborId = entry.neighbor_id;
+      const std::string &edgeId = entry.edge_id;
 
-    auto it = adjList.find(currentId);
-    if (it == adjList.end())
-      continue;
-
-    // Explore neighbors
-    for (const auto &[neighborId, isSymmetric] : it->second) {
-      // Find the edge between currentId and neighborId
-      float edgeWeight = 1.0f; // Default weight
-      try {
-        std::string edgeId = findEdgeId(currentId, neighborId);
-        edgeWeight = edges_.at(edgeId).getWeight();
-      } catch (const EdgeNotFoundError &) {
-        // Won't probably catch this..
+      // Skipp if edge already visited
+      if (visitedEdges.find(edgeId) != visitedEdges.end()) {
+        continue;
       }
 
+      const Edge &edge = edges_.at(edgeId);
+      float edgeWeight = edge.getWeight();
+
       if (edgeWeight >= minWeight) {
-        std::string depthKey = "depth_" + std::to_string(depth + 1);
-        if (result.find(depthKey) == result.end()) {
-          result[depthKey] = nlohmann::json::array();
+        visitedEdges.insert(edgeId);
+
+        // Add edge to result
+        nlohmann::json edgeJson = {{"id", edge.getId()},
+                                   {"label", edge.getLabel()},
+                                   {"weight", edge.getWeight()},
+                                   {"source", currentId},
+                                   {"target", neighborId}};
+        result["edges"].push_back(edgeJson);
+
+        // Mark neighbor as visited before adding to queue
+        if (visitedNodes.find(neighborId) == visitedNodes.end()) {
+          visitedNodes.insert(neighborId);
+
+          const Node &neighborNode = nodes_.at(neighborId);
+          result["nodes"].push_back({{"id", neighborNode.getId()},
+                                     {"label", neighborNode.getLabel()},
+                                     {"metadata", neighborNode.getMetadata()},
+                                     {"depth", depth + 1}});
+
+          queue.push({neighborId, depth + 1});
         }
-        result[depthKey].push_back(neighborId);
-        queue.push({neighborId, depth + 1});
       }
     }
   }
 
   return result;
-}
-
-std::string MemoryGraph::findEdgeId(const std::string &nodeId1,
-                                    const std::string &nodeId2) const {
-  for (const auto &[edgeId, edge] : edges_) {
-    if (std::holds_alternative<SymmetricConnections>(edge.getConnections())) {
-      const auto &conn_set =
-          std::get<SymmetricConnections>(edge.getConnections());
-      if (conn_set.find(nodeId1) != conn_set.end() &&
-          conn_set.find(nodeId2) != conn_set.end()) {
-        return edgeId;
-      }
-    } else {
-      const auto &conn_pair =
-          std::get<AsymmetricConnections>(edge.getConnections());
-      if ((conn_pair.first == nodeId1 && conn_pair.second == nodeId2) ||
-          (conn_pair.first == nodeId2 && conn_pair.second == nodeId1)) {
-        return edgeId;
-      }
-    }
-  }
-
-  throw EdgeNotFoundError("No edge found between '" + nodeId1 + "' and '" +
-                          nodeId2 + "'.");
 }
 
 void MemoryGraph::buildAdjacencyCache() const {
@@ -383,8 +364,8 @@ void MemoryGraph::buildAdjacencyCache() const {
       for (size_t i = 0; i < nodes.size(); ++i) {
         for (size_t j = i + 1; j < nodes.size(); ++j) {
           // Add both directions with isSymmetric = true
-          adjacencyCache_[nodes[i]].emplace_back(nodes[j], true);
-          adjacencyCache_[nodes[j]].emplace_back(nodes[i], true);
+          adjacencyCache_[nodes[i]].push_back({nodes[j], true, edgeId});
+          adjacencyCache_[nodes[j]].push_back({nodes[i], true, edgeId});
         }
       }
     } else {
@@ -392,7 +373,10 @@ void MemoryGraph::buildAdjacencyCache() const {
       const auto &conn_pair =
           std::get<AsymmetricConnections>(edge.getConnections());
       // Add one direction with isSymmetric = false
-      adjacencyCache_[conn_pair.first].emplace_back(conn_pair.second, false);
+      adjacencyCache_[conn_pair.first].push_back(
+          {conn_pair.second, false, edgeId});
+      adjacencyCache_[conn_pair.second].push_back(
+          {conn_pair.first, false, edgeId});
     }
   }
 
@@ -407,8 +391,7 @@ void MemoryGraph::buildAdjacencyCache() const {
   adjacencyDirty_ = false;
 }
 
-const std::unordered_map<std::string,
-                         std::vector<std::pair<std::string, bool>>> &
+const std::unordered_map<std::string, std::vector<AdjacencyEntry>> &
 MemoryGraph::getAdjacencyList() const {
   if (adjacencyDirty_) {
     buildAdjacencyCache();
@@ -417,18 +400,20 @@ MemoryGraph::getAdjacencyList() const {
   return adjacencyCache_;
 }
 
+void MemoryGraph::invalidateCache() { adjacencyDirty_ = true; }
+
 nlohmann::json MemoryGraph::toJson() const {
   nlohmann::json graphJson;
   graphJson["metadata"] = metadata_;
+  graphJson["mode"] =
+      (mode_ == GraphMode::KNOWLEDGE) ? "KNOWLEDGE" : "SYMBOLIC";
 
-  // Serialize nodes
   nlohmann::json nodesJson;
   for (const auto &[nodeId, node] : nodes_) {
     nodesJson[nodeId] = node.toJson();
   }
   graphJson["nodes"] = nodesJson;
 
-  // Serialize edges
   nlohmann::json edgesJson;
   for (const auto &[edgeId, edge] : edges_) {
     edgesJson[edgeId] = edge.toJson();
@@ -441,36 +426,29 @@ nlohmann::json MemoryGraph::toJson() const {
 MemoryGraph MemoryGraph::fromJson(const nlohmann::json &graphJson) {
   MemoryGraph graph(graphJson.value("metadata", nlohmann::json::object()));
 
+  std::string modeStr = graphJson.value("mode", "SYMBOLIC");
+  graph.mode_ =
+      (modeStr == "KNOWLEDGE") ? GraphMode::KNOWLEDGE : GraphMode::SYMBOLIC;
+
   if (graphJson.contains("nodes") && graphJson["nodes"].is_object()) {
     for (const auto &[nodeId, nodesJson] : graphJson["nodes"].items()) {
       try {
         graph.addNode(Node::fromJson(nodesJson));
       } catch (const std::exception &e) {
-        // Log error but continue
         std::cerr << "Failed to deserialize node '" << nodeId
                   << "': " << e.what() << std::endl;
       }
     }
   }
 
-  // Safely deserialize edges
   if (graphJson.contains("edges") && graphJson["edges"].is_object()) {
     for (const auto &[edgeId, edgeJson] : graphJson["edges"].items()) {
       try {
         Edge edge = Edge::fromJson(edgeJson);
-
-        // Check if this is a group edge
         if (edge.isGroupEdge()) {
-          // Extract node IDs from the connections
           const auto &conn =
               std::get<SymmetricConnections>(edge.getConnections());
-
-          // Create a set of node IDs from the connection
-          std::unordered_set<std::string> nodeIds;
-          for (const auto &nodeId : conn) {
-            nodeIds.insert(nodeId);
-          }
-
+          std::unordered_set<std::string> nodeIds(conn.begin(), conn.end());
           graph.addGroupEdge(edge.getId(), edge.getLabel(), nodeIds,
                              edge.getWeight(), edge.getMetadata());
         } else {
