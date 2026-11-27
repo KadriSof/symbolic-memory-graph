@@ -21,7 +21,12 @@ public:
 class NodeNotFoundError : public std::runtime_error {
 public:
   explicit NodeNotFoundError(const std::string &nodeId)
-      : std::runtime_error("Node with ID '" + nodeId + "' not found.") {}
+      : std::runtime_error("Node with ID '" + nodeId + "' not found"),
+        nodeId_(nodeId) {}
+  const std::string &nodeId() const { return nodeId_; }
+
+private:
+  std::string nodeId_;
 };
 
 /**
@@ -31,7 +36,12 @@ public:
 class EdgeNotFoundError : public std::runtime_error {
 public:
   explicit EdgeNotFoundError(const std::string &edgeId)
-      : std::runtime_error("Edge with ID '" + edgeId + "' not found.") {}
+      : std::runtime_error("Edge with ID '" + edgeId + "' not found"),
+        edgeId_(edgeId) {}
+  const std::string &edgeId() const { return edgeId_; }
+
+private:
+  std::string edgeId_;
 };
 
 /**
@@ -45,25 +55,31 @@ public:
  */
 class InvalidConnectionError : public std::runtime_error {
 public:
-  /**
-   * @brief Constructor for missing node ID
-   * @param nodeId The ID of the node that does not exist
-   */
-  explicit InvalidConnectionError(const std::string &nodeId)
-      : std::runtime_error("Node with ID '" + nodeId + "' does not exist.") {}
-
-  /**
-   * @brief Tag type to distinguish the raw message constructor
-   */
   struct RawMessageTag {};
+  explicit InvalidConnectionError(const std::string &nodeId)
+      : std::runtime_error("Node '" + nodeId + "' does not exist in the graph"),
+        nodeId_(nodeId) {}
+  InvalidConnectionError(RawMessageTag, const std::string &msg)
+      : std::runtime_error(msg) {}
+  const std::string &nodeId() const { return nodeId_; }
 
-  /**
-   * @brief Constructor for raw error messages
-   * @param tag Tag to distinguish from the node ID constructor
-   * @param message The raw error message
-   */
-  InvalidConnectionError(RawMessageTag, const std::string &message)
-      : std::runtime_error(message) {}
+private:
+  std::string nodeId_;
+};
+
+class ModeError : public std::runtime_error {
+public:
+  explicit ModeError(const std::string &operation,
+                     const std::string &currentMode)
+      : std::runtime_error("Operation '" + operation + "' is not allowed in " +
+                           currentMode + " mode"),
+        operation_(operation), currentMode_(currentMode) {}
+  const std::string &operation() const { return operation_; }
+  const std::string &currentMode() const { return currentMode_; }
+
+private:
+  std::string operation_;
+  std::string currentMode_;
 };
 
 } // namespace memory_graph
