@@ -1,6 +1,5 @@
 #pragma once
 
-#include "memory_graph/memory_graph.hpp"
 #include "memory_graph/node.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +10,8 @@
 #include <vector>
 
 namespace memory_graph {
+
+class MemoryGraph;
 
 // Configuration for Hebbian learning
 struct HebbianConfig {
