@@ -1,7 +1,11 @@
 #pragma once
 #include "memory_graph/edge.hpp"
+#include "memory_graph/hebbian.hpp"
 #include "memory_graph/node.hpp"
+#include <cstddef>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,7 +18,7 @@ enum class GraphMode { KNOWLEDGE, SYMBOLIC };
 struct AdjacencyEntry {
   std::string neighbor_id;
   bool is_symmetric;
-  std::string edge_id; // FIX #2: O(1) weight lookup
+  std::string edge_id;
 };
 
 class MemoryGraph {
@@ -47,6 +51,10 @@ public:
   std::vector<Edge> getGroupEdges() const;
   const std::unordered_map<std::string, Edge> &getEdgesRef() const;
 
+  // Helpers
+  std::optional<std::string> findEdgeBetween(const std::string &a,
+                                             const std::string &b) const;
+
   // Traversal
   std::vector<Node> getNeighbors(const std::string &nodeId) const;
   std::unordered_set<std::string>
@@ -66,6 +74,20 @@ public:
   nlohmann::json toJson() const;
   static MemoryGraph fromJson(const nlohmann::json &graphJson);
 
+  // Hebbian integration (SYMBOLIC MODE ONLY)
+  void attachHebbian(const HebbianConfig &config = HebbianConfig{});
+  void detachHebbian();
+  HebbianEngine &hebbian();
+  const HebbianEngine &hebbian() const;
+
+  // Convenience: fire + potentiate in one call (No-op in KNOWLEDGE MODE)
+  void learn(const std::vector<std::string> &fireModes);
+
+  // Convenience: spreading-activation query (Falls back to BFS in KNOWLEDGE
+  // MODE)
+  nlohmann::json activate(const std::string &seed, size_t k = 10,
+                          int maxDepth = 3);
+
 private:
   std::unordered_map<std::string, Node> nodes_;
   std::unordered_map<std::string, Edge> edges_;
@@ -78,6 +100,9 @@ private:
 
   void buildAdjacencyCache() const;
   void invalidateCache();
+
+  // Null in KNOWLEDGE MODE
+  std::unique_ptr<HebbianEngine> hebbian_;
 };
 
 } // namespace memory_graph

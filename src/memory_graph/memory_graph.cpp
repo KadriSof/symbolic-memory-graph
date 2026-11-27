@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -207,6 +208,23 @@ std::vector<Edge> MemoryGraph::getEdges() const {
     result.push_back(edge);
   }
   return result;
+}
+
+std::optional<std::string>
+MemoryGraph::findEdgeBetween(const std::string &a, const std::string &b) const {
+  const auto &adjList = getAdjacencyList(); // builds cache for us if dirty
+  auto it = adjList.find(a);
+  if (it == adjList.end()) {
+    return std::nullopt;
+  }
+
+  for (const auto &entry : it->second) {
+    if (entry.neighbor_id == b) {
+      return entry.edge_id;
+    }
+  }
+
+  return std::nullopt;
 }
 
 std::vector<Edge> MemoryGraph::getGroupEdges() const {
