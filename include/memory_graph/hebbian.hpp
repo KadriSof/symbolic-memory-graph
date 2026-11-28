@@ -136,8 +136,8 @@ public:
   void resetAll();
 
   // Serialization of Hebbian state (for checkpointing)
-  nlohmann::json toHebbian() const;
-  void fromHebbian(const nlohmann::json &state);
+  nlohmann::json toHebbianJson() const;
+  void fromHebbianJson(const nlohmann::json &state);
 
 private:
   MemoryGraph &graph_;

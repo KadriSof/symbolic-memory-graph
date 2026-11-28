@@ -8,7 +8,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -245,7 +244,7 @@ void HebbianEngine::normalizeHub(const std::string &nodeId) {
   }
 }
 
-// Spreading Activation
+// SPREADING ACTIVATION
 ActivationResult HebbianEngine::activate(const std::vector<std::string> &seeds,
                                          size_t k, int maxDepth) {
   ensureModeAllowed("activate");
@@ -308,6 +307,225 @@ ActivationResult HebbianEngine::activate(const std::vector<std::string> &seeds,
   }
 
   return result;
+}
+
+// CONSOLIDATION
+std::vector<std::string> HebbianEngine::consolidate() {
+  ensureModeAllowed("consolidate");
+
+  std::vector<std::string> new_assemblies;
+  if (!config_.auto_assembly)
+    return new_assemblies;
+
+  // Find pairs with coactivation >= assembly_threshold
+  std::unordered_map<std::string, std::unordered_set<std::string>> strong_pairs;
+  for (const auto &[key, count] : coactivation_count_) {
+    if (count >= config_.assembly_threshold) {
+      // This weak ass separator logic will break the code at some point, but
+      // well..
+      auto sep = key.find('|');
+      std::string a = key.substr(0, sep);
+      std::string b = key.substr(sep + 1);
+      strong_pairs[a].insert(b);
+      strong_pairs[b].insert(a);
+    }
+  }
+
+  // For each node with strong pairs, try to form an assembly
+  std::unordered_set<std::string> processed;
+  for (const auto &[nodeId, neighbors] : strong_pairs) {
+    if (processed.count(nodeId))
+      continue;
+
+    // Find common neighbors (triangle closure)
+    std::unordered_set<std::string> assembly;
+    assembly.insert(nodeId);
+
+    for (const auto &n1 : neighbors) {
+      if (!strong_pairs.count(n1))
+        continue;
+      for (const auto &n2 : neighbors) {
+        if (n1 == n2)
+          continue;
+        if (strong_pairs[n1].count(n2)) {
+          assembly.insert(n1);
+          assembly.insert(n2);
+        }
+      }
+    }
+
+    if (assembly.size() >= 3) {
+      // Check if this assembly already exists
+      bool exists = false;
+      for (const auto &edge : graph_.getGroupEdges()) {
+        const auto &conn =
+            std::get<SymmetricConnections>(edge.getConnections());
+        if (conn == assembly) {
+          exists = true;
+          break;
+        }
+      }
+
+      if (!exists) {
+        std::string groupId = "assembly_" + nodeId;
+        try {
+          graph_.addGroupEdge(
+              groupId, "ASSEMBLY", assembly, 0.8f,
+              {{"relation", "assembly"}, {"formed_tick", tick_}});
+          new_assemblies.push_back(groupId);
+        } catch (const DuplicateIdError &) {
+          // Well.. XDDD
+          groupId += "_" + std::to_string(tick_);
+          graph_.addGroupEdge(
+              groupId, "ASSEMBLY", assembly, 0.8f,
+              {{"relation", "assembly"}, {"formed_tick", tick_}});
+          new_assemblies.push_back(groupId);
+        }
+      }
+
+      for (const auto &id : assembly) {
+        processed.insert(id);
+      }
+    }
+  }
+
+  return new_assemblies;
+}
+
+// INSPECTION
+float HebbianEngine::getActivation(const std::string &nodeId) const {
+  auto it = activations_.find(nodeId);
+  return (it != activations_.end()) ? it->second : 0.0f;
+}
+
+const std::unordered_map<std::string, float> &
+HebbianEngine::getActivations() const {
+  return activations_;
+}
+
+uint32_t HebbianEngine::getCoactivationCount(const std::string &a,
+                                             const std::string &b) const {
+  std::string key = makePairKey(a, b);
+  auto it = coactivation_count_.find(key);
+  return (it != coactivation_count_.end()) ? it->second : 0;
+}
+
+uint32_t HebbianEngine::getTick() const { return tick_; }
+
+ActivationSnapshot HebbianEngine::snapshot() const {
+  return ActivationSnapshot{activations_, tick_};
+}
+
+float HebbianEngine::getEffectiveWeight(const std::string &edgeId) const {
+  const Edge &edge = graph_.getEdge(edgeId);
+  float stored_w = edge.getWeight();
+
+  // Apply lazy decay based on last_potentiated_tick
+  const auto &meta = edge.getMetadata();
+  uint32_t last_tick = tick_;
+  if (meta.contains("last_potentiated_tick")) {
+    last_tick = meta["last_potentiated_tick"].get<uint32_t>();
+  }
+
+  uint32_t elapsed = (tick_ > last_tick) ? (tick_ - last_tick) : 0;
+  if (elapsed == 0)
+    return stored_w;
+
+  // w_effective = w_stored * (1 - λ)^elapsed
+  float effective_w = stored_w * std::pow(1.0f - config_.decay_rate, elapsed);
+  return effective_w;
+}
+
+// STATE MANAGEMENT
+void HebbianEngine::resetTransient() {
+  activations_.clear();
+  last_fired_tick_.clear();
+  coactivation_count_.clear();
+  tick_ = 0;
+}
+
+void HebbianEngine::resetAll() {
+  resetTransient();
+  // Remove all Hebbian-created edges
+  std::vector<std::string> to_remove;
+  for (const auto &[edgeId, edge] : graph_.getEdgesRef()) {
+    if (edge.getLabel() == "HEBBIAN" || edge.getLabel() == "ASSEMBLY") {
+      to_remove.push_back(edgeId);
+    }
+  }
+  for (const auto &edgeId : to_remove) {
+    graph_.removeEdge(edgeId);
+  }
+}
+
+// SERIALIZATION
+nlohmann::json HebbianEngine::toHebbianJson() const {
+  nlohmann::json state;
+  state["tick"] = tick_;
+  state["config"] = {{"learning_rate", config_.learning_rate},
+                     {"decay_rate", config_.decay_rate},
+                     {"activation_tau", config_.activation_tau},
+                     {"wiring_threshold", config_.wiring_threshold},
+                     {"prune_threshold", config_.prune_threshold},
+                     {"max_weight", config_.max_weight},
+                     {"spreading_gamma", config_.spreading_gamma},
+                     {"auto_prune", config_.auto_prune},
+                     {"auto_assembly", config_.auto_assembly},
+                     {"assembly_threshold", config_.assembly_threshold},
+                     {"initial_edge_weight", config_.initial_edge_weight},
+                     {"degree_cap", config_.degree_cap}};
+
+  // Activations
+  nlohmann::json acts = nlohmann::json::object();
+  for (const auto &[id, act] : activations_) {
+    acts[id] = act;
+  }
+  state["activations"] = acts;
+
+  // Coactivation counts
+  nlohmann::json counts = nlohmann::json::object();
+  for (const auto &[key, count] : coactivation_count_) {
+    counts[key] = count;
+  }
+  state["coactivation_counts"] = counts;
+
+  return state;
+}
+
+void HebbianEngine::fromHebbianJson(const nlohmann::json &state) {
+  tick_ = state.value("tick", 0u);
+
+  if (state.contains("config")) {
+    const auto &cfg = state["config"];
+    config_.learning_rate = cfg.value("learning_rate", 0.1f);
+    config_.decay_rate = cfg.value("decay_rate", 0.01f);
+    config_.activation_tau = cfg.value("activation_tau", 3.0f);
+    config_.wiring_threshold = cfg.value("wiring_threshold", 2u);
+    config_.prune_threshold = cfg.value("prune_threshold", 0.05f);
+    config_.max_weight = cfg.value("max_weight", 1.0f);
+    config_.spreading_gamma = cfg.value("spreading_gamma", 0.5f);
+    config_.auto_prune = cfg.value("auto_prune", true);
+    config_.auto_assembly = cfg.value("auto_assembly", true);
+    config_.assembly_threshold = cfg.value("assembly_threshold", 3u);
+    config_.initial_edge_weight = cfg.value("initial_edge_weight", 0.1f);
+    config_.degree_cap = cfg.value("degree_cap", 50u);
+  }
+
+  activations_.clear();
+  if (state.contains("activations")) {
+    for (auto it = state["activations"].begin();
+         it != state["activations"].end(); ++it) {
+      activations_[it.key()] = it.value().get<float>();
+    }
+  }
+
+  coactivation_count_.clear();
+  if (state.contains("coactivation_counts")) {
+    for (auto it = state["coactivation_counts"].begin();
+         it != state["coactivation_counts"].end(); ++it) {
+      coactivation_count_[it.key()] = it.value().get<uint32_t>();
+    }
+  }
 }
 
 } // namespace memory_graph
