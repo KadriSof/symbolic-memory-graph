@@ -36,9 +36,10 @@ public:
    */
   Edge(const std::string &id, const std::string &label, EdgeType type,
        const Connections &connections, float weight = 1.0f,
-       const nlohmann::json &metadata = {}, bool isGroupEdge = false);
+       const nlohmann::json &metadata = nlohmann::json::object(),
+       bool isGroupEdge = false);
 
-  bool isGroupEdge() const { return isGroupEdge_; }
+  bool isGroupEdge() const;
 
   // Getters
   const std::string &getId() const;

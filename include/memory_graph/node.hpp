@@ -2,7 +2,6 @@
 
 #include <nlohmann/json.hpp>
 #include <string>
-#include <vector>
 
 namespace memory_graph {
 
@@ -21,30 +20,15 @@ public:
    * @param metadata Additional context (e.g., type, timestamp).
    */
   Node(const std::string &id, const std::string &label,
-       const nlohmann::json &metadata = {});
+       const nlohmann::json &metadata = nlohmann::json::object());
 
   // Getters
   const std::string &getId() const;
   const std::string &getLabel() const;
-  const std::vector<std::string> &getConnections() const;
   const nlohmann::json &getMetadata() const;
 
   // Setters
   void setLabel(const std::string &label);
-
-  /**
-   * @deprecated This method is no longer used by the graph.
-   * Connections are now managed by MemoryGraph
-   * This method is kept for serialization compatibility only.
-   */
-  void addConnection(const std::string &nodeId);
-
-  /**
-   * @deprecated This method is no longer used by the graph.
-   * Connections are now managed by MemoryGraph
-   * This method is kept for serialization compatibility only.
-   */
-  void removeConnection(const std::string &nodeId);
   void setMetadata(const nlohmann::json &metadata);
   void updateMetadata(const std::string &key, const nlohmann::json &value);
 
@@ -55,7 +39,6 @@ public:
 private:
   std::string id_;
   std::string label_;
-  std::vector<std::string> connections_;
   nlohmann::json metadata_;
 };
 

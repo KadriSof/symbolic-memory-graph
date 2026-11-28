@@ -14,32 +14,15 @@
 #include <vector>
 #include <zconf.h>
 #include <zlib.h>
-// #include <lz4.h>  // TODO: Implement the LZ4 later
 
 namespace memory_graph::utils {
-// Binary Serialization Implementation
-
-/**
- * Binary format structure (for now):
- * [Header]
- * - Magic bytes: "MEMG" (4 bytes)
- * - Version: uint32_t
- * - Flags: uint32_t
- * - Node count: uint32_t
- * - Edge count: uint32_t
- * - Edge count: uint32_t
- * - Total size: uint32_t
- * [Data]
- * - Nodes: JSON (one per node)
- * - Edges: JSON (one per edge)
- * - Metadata: JSON
- */
 
 namespace {
 constexpr uint32_t MAGIC = 0x474D454D; // "MEMG" in little-endian
 constexpr uint32_t FLAG_HAS_METADATA = 1 << 0;
-constexpr uint32_t FLAG_HAS_NODES = 1 << 1; // We will keep this for now
+constexpr uint32_t FLAG_HAS_NODES = 1 << 1;
 constexpr uint32_t FLAG_HAS_EDGES = 1 << 2;
+constexpr uint32_t FLAG_MODE_KNOWLEDGE = 1 << 3;
 
 struct BinaryHeader {
   uint32_t magic;
@@ -49,11 +32,9 @@ struct BinaryHeader {
   uint32_t edge_count;
   uint32_t data_size;
 
-  // Total header size: 24 bytes
   static constexpr size_t SIZE = 6 * sizeof(uint32_t);
 };
 
-// Helper Functions for Binary I/O
 void writeU32(std::vector<uint8_t> &output, uint32_t value) {
   output.push_back(value & 0xFF);
   output.push_back((value >> 8) & 0xFF);
@@ -66,65 +47,51 @@ uint32_t readU32(const std::uint8_t *rawData, size_t rawSize, size_t &offset) {
     throw std::runtime_error(
         "[serialization:readU32] Invalid binary data: unexpected EOF");
   }
-
   uint32_t value = static_cast<uint32_t>(rawData[offset]) |
                    (static_cast<uint32_t>(rawData[offset + 1]) << 8) |
                    (static_cast<uint32_t>(rawData[offset + 2]) << 16) |
                    (static_cast<uint32_t>(rawData[offset + 3]) << 24);
-
   offset += 4;
   return value;
 }
 
-// Compression Detection
 CompressionType detectCompressionType(const std::vector<uint8_t> &data) {
   if (data.size() < 2)
     return CompressionType::NONE;
 
-  // Check for uncompressed MEMG magic
   if (data.size() >= 4 && data[0] == 'M' && data[1] == 'E' && data[2] == 'M' &&
       data[3] == 'G') {
     return CompressionType::NONE;
   }
 
-  // Check for ZLIB headers
   if (data[0] == 0x78 && (data[1] == 0x01 || data[1] == 0x5E ||
                           data[1] == 0x9C || data[1] == 0xDA)) {
     return CompressionType::ZLIB;
   }
 
-  // TODO: Add GZIP and LZ4 detection
-  // if (data[0] == 0x1F && data[1] == 0x8B) return CompressionType::GZIP;
-  // if (data.size() >= 4 && data[0] == 0x04 && data[1] == 0x22 && data[2] ==
-  // 0x4D && data[3] == 0x18) return CompressionType::LZ4;
-
   return CompressionType::NONE;
 }
-
 } // namespace
 
-// Helper func for testing and debugging
 bool isCompressed(const std::vector<uint8_t> &data) {
   return detectCompressionType(data) != CompressionType::NONE;
 }
 
 std::vector<uint8_t> toBinary(const MemoryGraph &graph,
                               const SerializationOptions &options) {
-  // 1. We get the JSON representation (no Jasons were harmed during this
-  // serialization)
   nlohmann::json graphJson = graph.toJson();
   BinaryHeader header;
+
   header.magic = MAGIC;
   header.version = options.version;
   header.flags = 0;
 
-  // 2. Apply options to JSON and header
   header.flags |= FLAG_HAS_NODES;
-  header.node_count = graph.getNodes().size();
+  header.node_count = graph.getNodesRef().size();
 
   if (options.include_edges) {
     header.flags |= FLAG_HAS_EDGES;
-    header.edge_count = graph.getEdges().size();
+    header.edge_count = graph.getEdgesRef().size();
   } else {
     header.edge_count = 0;
     if (graphJson.contains("edges"))
@@ -138,12 +105,14 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
       graphJson.erase("metadata");
   }
 
-  // 3. Build data buffer (JSON as string)
+  if (graph.getMode() == GraphMode::KNOWLEDGE) {
+    header.flags |= FLAG_MODE_KNOWLEDGE;
+  }
+
   std::string jsonString = graphJson.dump();
   std::vector<uint8_t> data(jsonString.begin(), jsonString.end());
   header.data_size = data.size();
 
-  // 4. Assembke binary output
   std::vector<uint8_t> output;
   output.reserve(BinaryHeader::SIZE + data.size());
 
@@ -154,10 +123,8 @@ std::vector<uint8_t> toBinary(const MemoryGraph &graph,
   writeU32(output, header.edge_count);
   writeU32(output, header.data_size);
 
-  // 5. Write data
   output.insert(output.end(), data.begin(), data.end());
 
-  // 6. Compress if requested
   if (options.compression != CompressionType::NONE) {
     return compress(output, options.compression);
   }
@@ -170,7 +137,6 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   const uint8_t *rawData = data.data();
   size_t rawSize = data.size();
 
-  // 1. Check if data is compressed and decompress
   CompressionType compType = detectCompressionType(data);
   if (compType != CompressionType::NONE) {
     try {
@@ -184,7 +150,6 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
     }
   }
 
-  // 2. Parse header
   if (rawSize < BinaryHeader::SIZE) {
     throw std::runtime_error(
         "[serialization:fromBinary] Invalid binary data: too small");
@@ -198,7 +163,6 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   uint32_t edge_count = readU32(rawData, rawSize, offset);
   uint32_t data_size = readU32(rawData, rawSize, offset);
 
-  // 3. Validate
   if (magic != MAGIC) {
     throw std::runtime_error("[serialization:fromBinary] Invalid binary data: "
                              "incorrect magic bytes");
@@ -213,23 +177,22 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
   if (data_size > rawSize - offset) {
     throw std::runtime_error(
         "[serialization:fromBinary] Invalid binary data: data_size (" +
-        std::to_string(data_size) + ") excceds remaining buffer size (" +
+        std::to_string(data_size) + ") exceeds remaining buffer size (" +
         std::to_string(rawSize - offset) + ")");
   }
 
-  const size_t MAX_DATA_SIZE = 100 * 1024 * 1024; // 100 MB
+  const size_t MAX_DATA_SIZE = 100 * 1024 * 1024;
   if (data_size > MAX_DATA_SIZE) {
     throw std::runtime_error(
         "[serialization:binary] Invalid binary data: data_size (" +
-        std::to_string(data_size) + ") excceds maximum allowed (" +
+        std::to_string(data_size) + ") exceeds maximum allowed (" +
         std::to_string(MAX_DATA_SIZE) + ")");
   }
 
-  // 4. Parse JSON data
   std::string jsonString(reinterpret_cast<const char *>(rawData + offset),
                          data_size);
-
   nlohmann::json graphJson;
+
   try {
     graphJson = nlohmann::json::parse(jsonString);
   } catch (const nlohmann::json::parse_error &e) {
@@ -237,8 +200,16 @@ MemoryGraph fromBinary(const std::vector<uint8_t> &data) {
         "[serialization:fromBinary] Failed to parse JSON: " +
         std::string(e.what()));
   }
-  // 5. Reconstruct graph
-  return MemoryGraph::fromJson(graphJson);
+
+  MemoryGraph graph = MemoryGraph::fromJson(graphJson);
+
+  if (!(flags & FLAG_MODE_KNOWLEDGE)) {
+    graph.setMode(GraphMode::SYMBOLIC);
+  } else {
+    graph.setMode(GraphMode::KNOWLEDGE);
+  }
+
+  return graph;
 }
 
 // Incremental Serialization (Deltas)
@@ -250,8 +221,8 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   auto getNodeIds =
       [](const MemoryGraph &graph) -> std::unordered_set<std::string> {
     std::unordered_set<std::string> ids;
-    for (const auto &node : graph.getNodes()) {
-      ids.insert(node.getId());
+    for (const auto &[id, _] : graph.getNodesRef()) {
+      ids.insert(id);
     }
     return ids;
   };
@@ -260,25 +231,24 @@ nlohmann::json computeDelta(const MemoryGraph &before,
   auto getEdgeIds =
       [](const MemoryGraph &graph) -> std::unordered_set<std::string> {
     std::unordered_set<std::string> ids;
-    for (const auto &edge : graph.getEdges()) {
-      ids.insert(edge.getId());
+    for (const auto &[id, _] : graph.getEdgesRef()) {
+      ids.insert(id);
     }
     return ids;
   };
 
-  // 1. Node changes
   auto beforeNodes = getNodeIds(before);
   auto afterNodes = getNodeIds(after);
 
-  // Find added nodes: store full JSON data
+  // Find added nodes
   nlohmann::json addedNodes = nlohmann::json::object();
   for (const auto &id : afterNodes) {
     if (beforeNodes.find(id) == beforeNodes.end()) {
-      addedNodes[id] = after.getNode(id).toJson(); // Full node data
+      addedNodes[id] = after.getNode(id).toJson();
     }
   }
 
-  // Find removed nodes: store IDs only
+  // Find removed nodes
   std::vector<std::string> removedNodes;
   for (const auto &id : beforeNodes) {
     if (afterNodes.find(id) == afterNodes.end()) {
@@ -292,27 +262,24 @@ nlohmann::json computeDelta(const MemoryGraph &before,
     if (beforeNodes.find(id) != beforeNodes.end()) {
       const Node &beforeNode = before.getNode(id);
       const Node &afterNode = after.getNode(id);
-
-      // Compare (simplified - check if JSON representation differ)
       if (beforeNode.toJson() != afterNode.toJson()) {
         modifiedNodes[id] = afterNode.toJson();
       }
     }
   }
 
-  // 2. Edge changes
   auto beforeEdges = getEdgeIds(before);
   auto afterEdges = getEdgeIds(after);
 
-  // Find added edges: store full JSON data
+  // Find added edges
   nlohmann::json addedEdges = nlohmann::json::object();
   for (const auto &id : afterEdges) {
     if (beforeEdges.find(id) == beforeEdges.end()) {
-      addedEdges[id] = after.getEdge(id).toJson(); // Full edge data
+      addedEdges[id] = after.getEdge(id).toJson();
     }
   }
 
-  // Find removed edges: store IDs only
+  // Find removed edges
   std::vector<std::string> removedEdges;
   for (const auto &id : beforeEdges) {
     if (afterEdges.find(id) == afterEdges.end()) {
@@ -326,29 +293,31 @@ nlohmann::json computeDelta(const MemoryGraph &before,
     if (beforeEdges.find(id) != beforeEdges.end()) {
       const Edge &beforeEdge = before.getEdge(id);
       const Edge &afterEdge = after.getEdge(id);
-
       if (beforeEdge.toJson() != afterEdge.toJson()) {
         modifiedEdges[id] = afterEdge.toJson();
       }
     }
   }
 
-  // 3. Build delta
-  // Nodes:
   if (!addedNodes.empty())
     delta["added_nodes"] = addedNodes;
   if (!removedNodes.empty())
     delta["removed_nodes"] = removedNodes;
   if (!modifiedNodes.empty())
     delta["modified_nodes"] = modifiedNodes;
-  // Edges:
+
   if (!addedEdges.empty())
     delta["added_edges"] = addedEdges;
   if (!removedEdges.empty())
     delta["removed_edges"] = removedEdges;
   if (!modifiedEdges.empty())
     delta["modified_edges"] = modifiedEdges;
-  // Metadata:
+
+  if (before.getMode() != after.getMode()) {
+    delta["mode"] =
+        (after.getMode() == GraphMode::KNOWLEDGE) ? "KNOWLEDGE" : "SYMBOLIC";
+  }
+
   if (before.getMetadata() != after.getMetadata()) {
     delta["metadata"] = after.getMetadata();
   }
@@ -357,12 +326,16 @@ nlohmann::json computeDelta(const MemoryGraph &before,
 }
 
 void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
-  // 1. Apply metadata changes
+  if (delta.contains("mode")) {
+    std::string modeStr = delta["mode"].get<std::string>();
+    graph.setMode(modeStr == "KNOWLEDGE" ? GraphMode::KNOWLEDGE
+                                         : GraphMode::SYMBOLIC);
+  }
+
   if (delta.contains("metadata")) {
     graph.setMetadata(delta["metadata"]);
   }
 
-  // 2. Remove nodes
   if (delta.contains("removed_nodes")) {
     for (const auto &nodeId : delta["removed_nodes"]) {
       if (graph.hasNode(nodeId)) {
@@ -371,7 +344,6 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
     }
   }
 
-  // 3. Remove edges
   if (delta.contains("removed_edges")) {
     for (const auto &edgeId : delta["removed_edges"]) {
       if (graph.hasEdge(edgeId)) {
@@ -380,31 +352,26 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
     }
   }
 
-  // 4. Add nodes
   if (delta.contains("added_nodes")) {
     for (auto it = delta["added_nodes"].begin();
          it != delta["added_nodes"].end(); ++it) {
       std::string nodeId = it.key();
       nlohmann::json nodeJson = it.value();
-
-      // Create node from JSON and add it
       Node node = Node::fromJson(nodeJson);
       graph.addNode(node);
     }
   }
 
-  // 5. Add/update modified nodes
   if (delta.contains("modified_nodes")) {
     for (auto it = delta["modified_nodes"].begin();
          it != delta["modified_nodes"].end(); ++it) {
       std::string nodeId = it.key();
       nlohmann::json nodeJson = it.value();
 
-      // We can't replace a node so we remove and re-add it
       if (graph.hasNode(nodeId)) {
-        // Save the actual edge objects before we delete the node
+        // Save incident edges before removing node
         std::vector<Edge> incidentEdges;
-        for (const auto &edge : graph.getEdges()) {
+        for (const auto &[edgeId, edge] : graph.getEdgesRef()) {
           if (std::holds_alternative<SymmetricConnections>(
                   edge.getConnections())) {
             const auto &conn_set =
@@ -421,7 +388,6 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
           }
         }
 
-        // Remove and re-add the node
         graph.removeNode(nodeId);
         Node node = Node::fromJson(nodeJson);
         graph.addNode(node);
@@ -433,7 +399,6 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
     }
   }
 
-  // 6. Add edges
   if (delta.contains("added_edges")) {
     for (auto it = delta["added_edges"].begin();
          it != delta["added_edges"].end(); ++it) {
@@ -447,18 +412,15 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
     }
   }
 
-  // 7. Update modified edges
   if (delta.contains("modified_edges")) {
     for (auto it = delta["modified_edges"].begin();
          it != delta["modified_edges"].end(); ++it) {
       std::string edgeId = it.key();
       nlohmann::json edgeJson = it.value();
 
-      // We remove and re-add modified edges
       if (graph.hasEdge(edgeId)) {
         graph.removeEdge(edgeId);
       }
-
       Edge edge = Edge::fromJson(edgeJson);
       graph.addEdge(edge);
     }
@@ -467,7 +429,6 @@ void applyDelta(MemoryGraph &graph, const nlohmann::json &delta) {
 
 void applyDeltaBinary(MemoryGraph &graph,
                       const std::vector<uint8_t> &deltaData) {
-  // Decompress if needed
   if (deltaData.empty()) {
     throw std::runtime_error(
         "[utils:serialization] applyDeltaBinary: empty delta data");
@@ -478,14 +439,12 @@ void applyDeltaBinary(MemoryGraph &graph,
   size_t size = deltaData.size();
 
   CompressionType compType = detectCompressionType(deltaData);
-
   if (compType != CompressionType::NONE) {
     decompressed = decompress(deltaData);
     data = decompressed.data();
     size = decompressed.size();
   }
 
-  // Parse JSON delta
   if (size == 0) {
     throw std::runtime_error("[utils:serialization] applyDeltaBinary: empty "
                              "data after decompression");
@@ -493,7 +452,6 @@ void applyDeltaBinary(MemoryGraph &graph,
 
   std::string jsonString(reinterpret_cast<const char *>(data), size);
   nlohmann::json delta = nlohmann::json::parse(jsonString);
-
   applyDelta(graph, delta);
 }
 
@@ -503,12 +461,9 @@ std::vector<uint8_t> compress(const std::vector<uint8_t> &data,
     return data;
   }
 
-  // TODO: Implement the rest of compression types later (with proper wrappers
-  // and error handling)
   if (type == CompressionType::ZLIB) {
     uLongf compressedSize = compressBound(data.size());
     std::vector<uint8_t> result(compressedSize);
-
     int ret = compress2(result.data(), &compressedSize, data.data(),
                         data.size(), Z_DEFAULT_COMPRESSION);
     if (ret != Z_OK) {
@@ -516,19 +471,17 @@ std::vector<uint8_t> compress(const std::vector<uint8_t> &data,
           "[serialization:compress] ZLIB compression failed: " +
           std::to_string(ret));
     }
-
     result.resize(compressedSize);
     return result;
   }
 
-  // Unsupported compression type
   throw std::runtime_error(
       "[utils:serialization] Compression type not supported");
 }
 
 std::vector<uint8_t> decompress(const std::vector<uint8_t> &data) {
   if (data.size() < 2) {
-    throw std::runtime_error("[serialization:decompress] Invlaid compressed "
+    throw std::runtime_error("[serialization:decompress] Invalid compressed "
                              "data: data size too small");
   }
 
@@ -541,10 +494,11 @@ std::vector<uint8_t> decompress(const std::vector<uint8_t> &data) {
   uLongf uncompressedSize = data.size() * 4;
   if (uncompressedSize < 1024)
     uncompressedSize = 1024;
-  std::vector<uint8_t> result(uncompressedSize);
 
+  std::vector<uint8_t> result(uncompressedSize);
   int ret;
   const size_t MAX_UNCOMPRESSED_SIZE = 100 * 1024 * 1024;
+
   while ((ret = uncompress(result.data(), &uncompressedSize, data.data(),
                            data.size())) == Z_BUF_ERROR) {
     if (uncompressedSize > MAX_UNCOMPRESSED_SIZE) {
@@ -565,40 +519,27 @@ std::vector<uint8_t> decompress(const std::vector<uint8_t> &data) {
   return result;
 }
 
-/**
- * @brief Internal helper to parse and validate the binary header
- * @param data Binary data to parse
- * @param out_version Output parameter for the extracted version (optional)
- * @param out_node_count Output parameter for node count (optional)
- * @param out_edge_count Output parameter for edge count (optional)
- * @param out_data_size Output parameter for data size (optional)
- * @throws std::runtime_error if header is Invalid
- */
 static void parseAndValidateHeader(const std::vector<uint8_t> &data,
                                    uint32_t *out_version = nullptr,
                                    uint32_t *out_node_count = nullptr,
                                    uint32_t *out_edge_count = nullptr,
                                    uint32_t *out_data_size = nullptr) {
-  // 1. Decompress if needed
   std::vector<uint8_t> decompressedData;
   const uint8_t *rawData = data.data();
   size_t rawSize = data.size();
 
   CompressionType compType = detectCompressionType(data);
-
   if (compType != CompressionType::NONE) {
     decompressedData = decompress(data);
     rawData = decompressedData.data();
     rawSize = decompressedData.size();
   }
 
-  // 2. Validate minimum size
   if (rawSize < BinaryHeader::SIZE) {
     throw std::runtime_error("[serialization:parseAndValidateHeader] Invalid "
                              "binary data: too small");
   }
 
-  // 3. Read header fields
   size_t offset = 0;
   uint32_t magic = readU32(rawData, rawSize, offset);
   uint32_t version = readU32(rawData, rawSize, offset);
@@ -607,13 +548,11 @@ static void parseAndValidateHeader(const std::vector<uint8_t> &data,
   uint32_t edge_count = readU32(rawData, rawSize, offset);
   uint32_t data_size = readU32(rawData, rawSize, offset);
 
-  // 4. Validate magic bytes first
   if (magic != MAGIC) {
     throw std::runtime_error("[serialization:parseAndValidateHeader] Invalid "
                              "binary data: Incorrect magic bytes");
   }
 
-  // 5. Validate version
   if (version != SERIALIZATION_VERSION) {
     throw std::runtime_error(
         "[serialization:parseAndValidateHeader] Version mismatch: expected " +
@@ -621,7 +560,6 @@ static void parseAndValidateHeader(const std::vector<uint8_t> &data,
         std::to_string(version));
   }
 
-  // 6.Validate data_size fits in buffer
   if (offset + data_size > rawSize) {
     throw std::runtime_error("serialization:parseAndValidateHeader] Invalid "
                              "binary data: data_size exceeds buffer");
@@ -637,7 +575,6 @@ static void parseAndValidateHeader(const std::vector<uint8_t> &data,
     *out_data_size = data_size;
 }
 
-// Version Management
 uint32_t getVersion(const std::vector<uint8_t> &data) {
   uint32_t version = 0;
   parseAndValidateHeader(data, &version);

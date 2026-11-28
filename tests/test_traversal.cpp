@@ -377,7 +377,12 @@ TEST(TraversalTest, TopologicalSortWithSymmetricEdges) {
   // Topological sort should still work, treating symmetric edges as
   // non-dependencies
   EXPECT_EQ(result.size(), 3);
-  EXPECT_EQ(result[0], "letho");
+
+  // vesemir and letho have 0 in-degree, so they can appear in either order.
+  // geralt has in-degree 1, so it must be last.
+  EXPECT_TRUE((result[0] == "vesemir" && result[1] == "letho") ||
+              (result[0] == "letho" && result[1] == "vesemir"));
+  EXPECT_EQ(result[2], "geralt");
 }
 
 TEST(TraversalTest, TopologicalSortWithCycle) {
