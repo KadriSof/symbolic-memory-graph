@@ -208,28 +208,37 @@ bool hasCycle(const MemoryGraph &graph) {
   std::unordered_set<std::string> recursionStack;
 
   std::function<bool(const std::string &, const std::string &)> dfsCycle =
-      [&](const std::string &nodeId, const std::string &parent) -> bool {
+      [&](const std::string &nodeId,
+          const std::string &incomingEdgeId) -> bool {
     visited.insert(nodeId);
     recursionStack.insert(nodeId);
 
     auto it = adjList.find(nodeId);
-    if (it == adjList.end()) {
-      recursionStack.erase(nodeId);
-      return false;
-    }
+    if (it != adjList.end()) {
+      for (const auto &entry : it->second) {
+        // Prevent immediate backtrack on the same undirected edge
+        // (avoids false 2-cycles on single symmetric edges)
+        if (entry.edge_id == incomingEdgeId)
+          continue;
 
-    for (const auto &entry : it->second) {
-      // Skip parent only if edge is symmetric
-      if (entry.is_symmetric && entry.neighbor_id == parent)
-        continue;
-
-      if (visited.find(entry.neighbor_id) == visited.end()) {
-        if (dfsCycle(entry.neighbor_id, nodeId)) {
-          return true;
+        // For asymmetric edges, only traverse in the forward direction
+        if (!entry.is_symmetric) {
+          const Edge &edge = graph.getEdge(entry.edge_id);
+          const auto &conn =
+              std::get<AsymmetricConnections>(edge.getConnections());
+          if (conn.first != nodeId) {
+            continue; // This is the reverse direction, skip
+          }
         }
-      } else if (recursionStack.find(entry.neighbor_id) !=
-                 recursionStack.end()) {
-        return true; // cycle detected
+
+        if (visited.find(entry.neighbor_id) == visited.end()) {
+          if (dfsCycle(entry.neighbor_id, entry.edge_id)) {
+            return true;
+          }
+        } else if (recursionStack.find(entry.neighbor_id) !=
+                   recursionStack.end()) {
+          return true; // cycle detected
+        }
       }
     }
 
@@ -255,25 +264,26 @@ std::vector<std::string> topologicalSort(const MemoryGraph &graph) {
         "[utils:traversal] Graph has a cycle - topological sort impossible");
   }
 
-  const auto &adjList = graph.getAdjacencyList();
   std::unordered_map<std::string, int> inDegree;
-  std::queue<std::string> queue;
-  std::vector<std::string> result;
+  std::unordered_map<std::string, std::vector<std::string>> directedAdj;
 
-  // Initialize in-degree for all nodes
-  for (const auto &[nodeId, _] : adjList) {
+  // Initialize all nodes
+  for (const auto &[nodeId, _] : graph.getNodesRef()) {
     inDegree[nodeId] = 0;
+    directedAdj[nodeId] = {};
   }
 
-  // Count incoming edges
-  for (const auto &[nodeId, neighbors] : adjList) {
-    for (const auto &entry : neighbors) {
-      // Only count asymmetric edges
-      if (!entry.is_symmetric) {
-        inDegree[entry.neighbor_id]++;
-      }
+  // Build directed graph and count in-degrees (ignoring symmetric edges)
+  for (const auto &[edgeId, edge] : graph.getEdgesRef()) {
+    if (edge.getType() == EdgeType::ASYMMETRIC) {
+      const auto &conn = std::get<AsymmetricConnections>(edge.getConnections());
+      directedAdj[conn.first].push_back(conn.second);
+      inDegree[conn.second]++;
     }
   }
+
+  std::queue<std::string> queue;
+  std::vector<std::string> result;
 
   // Find nodes with 0 in-degree
   for (const auto &[id, count] : inDegree) {
@@ -282,38 +292,25 @@ std::vector<std::string> topologicalSort(const MemoryGraph &graph) {
     }
   }
 
-  // Process queue
+  // Process queue (Kahn's algorithm)
   while (!queue.empty()) {
     std::string nodeId = queue.front();
     queue.pop();
     result.push_back(nodeId);
 
-    auto it = adjList.find(nodeId);
-    if (it != adjList.end()) {
-      for (const auto &entry : it->second) {
-        // Only decrement for asymmetric edges
-        if (!entry.is_symmetric) {
-          inDegree[entry.neighbor_id]--;
-          if (inDegree[entry.neighbor_id] == 0) {
-            queue.push(entry.neighbor_id);
-          }
+    auto it = directedAdj.find(nodeId);
+    if (it != directedAdj.end()) {
+      for (const auto &neighbor : it->second) {
+        inDegree[neighbor]--;
+        if (inDegree[neighbor] == 0) {
+          queue.push(neighbor);
         }
-      }
-    }
-  }
-
-  // Verify all nodes were processed
-  if (result.size() != adjList.size()) {
-    for (const auto &[nodeId, _] : adjList) {
-      if (std::find(result.begin(), result.end(), nodeId) == result.end()) {
-        result.push_back(nodeId);
       }
     }
   }
 
   return result;
 }
-
 bool isConnected(const MemoryGraph &graph, const std::string &start) {
   if (!graph.hasNode(start)) {
     throw NodeNotFoundError(start);
