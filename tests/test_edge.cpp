@@ -47,8 +47,9 @@ TEST(EdgeTest, DefaultWeightAndMetadata) {
   AsymmetricConnections conn{"luffy", "shanks"};
   Edge edge("e1", "inspired_by", EdgeType::SYMMETRIC, conn);
 
-  EXPECT_EQ(edge.getWeight(), 1.0f);         // Default weight
-  EXPECT_TRUE(edge.getMetadata().is_null()); // Defualt metadata
+  EXPECT_EQ(edge.getWeight(), 1.0f); // Default weight
+  EXPECT_TRUE(edge.getMetadata().is_object());
+  EXPECT_TRUE(edge.getMetadata().empty()); // Defualt metadata
 }
 
 TEST(EdgeTest, InvalidWeightThrows) {

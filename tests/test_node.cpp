@@ -1,6 +1,7 @@
 #include "memory_graph/node.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <string>
 
 using namespace memory_graph;
 using json = nlohmann::json;
@@ -11,8 +12,8 @@ TEST(NodeTest, DefaultMetadataConstructor) {
 
   EXPECT_EQ(node.getId(), "luffy");
   EXPECT_EQ(node.getLabel(), "Monkey D. Luffy");
-  EXPECT_TRUE(node.getMetadata().is_null()); // Default metadata should be null
-  EXPECT_TRUE(node.getConnections().empty());
+  EXPECT_TRUE(node.getMetadata().is_object());
+  EXPECT_TRUE(node.getMetadata().empty());
 }
 
 TEST(NodeTest, ConstructorWithMetadata) {
@@ -23,7 +24,6 @@ TEST(NodeTest, ConstructorWithMetadata) {
   EXPECT_EQ(node.getLabel(), "Monkey D. Luffy");
   EXPECT_EQ(node.getMetadata()["type"], "character");
   EXPECT_EQ(node.getMetadata()["bounty"], 3000000000);
-  EXPECT_TRUE(node.getConnections().empty());
 }
 
 // Getter Tests
@@ -33,7 +33,6 @@ TEST(NodeTest, Getters) {
   EXPECT_EQ(node.getId(), "zoro");
   EXPECT_EQ(node.getLabel(), "Roronoa Zoro");
   EXPECT_EQ(node.getMetadata()["role"], "swordsman");
-  EXPECT_TRUE(node.getConnections().empty());
 }
 
 // Setter Tests
@@ -66,17 +65,34 @@ TEST(NodeTest, UpdateMetadata) {
   EXPECT_EQ(node.getMetadata()["type"], "devil_fruit_user"); // Overwrites
 }
 
-// Serialization Tests (Note: connections are serialized but never mutated)
-TEST(NodeTest, ToJsonEmptyConnections) {
-  Node node("luffy", "Monkey D. Luffy");
+// Serialization Tests
+TEST(NodeTest, ToJson) {
+  Node node("luffy", "Monkey D. Luffy", json{{"bounty", 3000000000}});
 
   json nodeJson = node.toJson();
 
-  EXPECT_EQ(nodeJson["connections"].size(), 0);
-  EXPECT_TRUE(nodeJson["connections"].is_array());
+  EXPECT_EQ(nodeJson["id"], "luffy");
+  EXPECT_EQ(nodeJson["label"], "Monkey D. Luffy");
+  EXPECT_EQ(nodeJson["metadata"]["bounty"], 3000000000);
+
+  // FIX #4: connections are no longer serialized from Node
+  EXPECT_FALSE(nodeJson.contains("connections"));
 }
 
-TEST(NodeTest, FromJsonEmptyConnections) {
+TEST(NodeTest, FromJson) {
+  json nodeJson = {{"id", "luffy"},
+                   {"label", "Monkey D. Luffy"},
+                   {"metadata", json::object()}};
+
+  Node node = Node::fromJson(nodeJson);
+
+  EXPECT_EQ(node.getId(), "luffy");
+  EXPECT_EQ(node.getLabel(), "Monkey D. Luffy");
+  EXPECT_TRUE(node.getMetadata().is_object());
+}
+
+TEST(NodeTest, FromJsonIgnoresLegacyConnections) {
+  // If legacy JSON has connections, it should be safely ignored
   json nodeJson = {{"id", "luffy"},
                    {"label", "Monkey D. Luffy"},
                    {"connections", json::array()},
@@ -84,7 +100,11 @@ TEST(NodeTest, FromJsonEmptyConnections) {
 
   Node node = Node::fromJson(nodeJson);
 
-  EXPECT_TRUE(node.getConnections().empty());
+  EXPECT_EQ(node.getId(), "luffy");
+  EXPECT_EQ(node.getLabel(), "Monkey D. Luffy");
+
+  // Verify it doesn't leak into new serialization
+  EXPECT_FALSE(node.toJson().contains("connections"));
 }
 
 // Edge Case Tests
@@ -118,9 +138,4 @@ TEST(NodeTest, ConstNodeGetters) {
   EXPECT_EQ(node.getId(), "const_test");
   EXPECT_EQ(node.getLabel(), "Const Node");
   EXPECT_EQ(node.getMetadata()["test"], true);
-  EXPECT_TRUE(node.getConnections().empty());
-
-  // The following would NOT compile (good - const correctness)
-  // node.setLabel("new");  // Error: cannot call non-const method on const
-  // object
 }

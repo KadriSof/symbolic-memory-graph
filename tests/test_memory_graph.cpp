@@ -1,13 +1,14 @@
 #include "memory_graph/edge.hpp"
 #include "memory_graph/exceptions.hpp"
+#include "memory_graph/hebbian.hpp"
 #include "memory_graph/memory_graph.hpp"
 #include "memory_graph/node.hpp"
 #include "test_utils.hpp"
-#include <algorithm>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -74,16 +75,11 @@ TEST(MemoryGraphTest, RemoveNode) {
 TEST(MemoryGraphTest, RemoveNodeWithEdges) {
   MemoryGraph graph = createTestGraph();
 
-  // Luffy has connections to zoro, nami, shanks, straw_hats
   EXPECT_EQ(graph.getNeighbors("luffy").size(), 4);
 
-  // Remove nami (sorry Nami :p)
   graph.removeNode("nami");
 
-  // Luffy should now have 3 connections (zoro, shanks, straw_hats)
   EXPECT_EQ(graph.getNeighbors("luffy").size(), 3);
-
-  // Edge to nami should be gone
   EXPECT_FALSE(graph.hasEdge("luffy_nami"));
 }
 
@@ -98,7 +94,6 @@ TEST(MemoryGraphTest, GetNodes) {
 
   EXPECT_EQ(nodes.size(), 5);
 
-  // Verify all nodes are present
   std::unordered_set<std::string> nodeIds;
   for (const auto &node : nodes) {
     nodeIds.insert(node.getId());
@@ -126,7 +121,6 @@ TEST(MemoryGraphTest, AddAsymmetricEdge) {
   EXPECT_TRUE(graph.hasEdge("e1"));
   EXPECT_EQ(graph.getEdges().size(), 1);
 
-  // Check that connections was added to nodes
   const auto &neighbors = graph.getNeighbors("luffy");
   EXPECT_EQ(neighbors.size(), 1);
   EXPECT_EQ(neighbors[0].getId(), "shanks");
@@ -147,7 +141,6 @@ TEST(MemoryGraphTest, AddSymmetricEdge) {
   EXPECT_NO_THROW(graph.addEdge(edge));
   EXPECT_TRUE(graph.hasEdge("e1"));
 
-  // Check bidirectional connections
   const auto &luffyConnections = graph.getNeighbors("luffy");
   const auto &zoroConnections = graph.getNeighbors("zoro");
   EXPECT_EQ(luffyConnections.size(), 1);
@@ -159,7 +152,6 @@ TEST(MemoryGraphTest, AddSymmetricEdge) {
 TEST(MemoryGraphTest, AddGroupEdge) {
   MemoryGraph graph;
 
-  // Add nodes
   Node a("a", "Node A");
   Node b("b", "Node B");
   Node c("c", "Node C");
@@ -167,11 +159,9 @@ TEST(MemoryGraphTest, AddGroupEdge) {
   graph.addNode(b);
   graph.addNode(c);
 
-  // Create group edge
   std::unordered_set<std::string> group{"a", "b", "c"};
   graph.addGroupEdge("group1", "Test Group", group, 1.0f);
 
-  // Verify all pairs are connected
   EXPECT_TRUE(graph.hasEdge("group1"));
   EXPECT_EQ(graph.getNeighbors("a").size(), 2);
   EXPECT_EQ(graph.getNeighbors("b").size(), 2);
@@ -200,17 +190,14 @@ TEST(MemoryGraphTest, AddGroupEdgeWithInvalidNodesThrows) {
   Node narrator("narrator", "Narrator");
   graph.addNode(narrator);
 
-  // Non-existent node
   std::unordered_set<std::string> fightClub{"narrator", "tyler_durden"};
   EXPECT_THROW(graph.addGroupEdge("fight_club", "Fight Club", fightClub, 1.0f),
                InvalidConnectionError);
 
-  // Empty Group
   std::unordered_set<std::string> minutemen;
   EXPECT_THROW(graph.addGroupEdge("minutemen", "minutemen", minutemen, 1.0f),
                InvalidConnectionError);
 
-  // Single Node
   std::unordered_set<std::string> watchmen{"dr_manhatan"};
   EXPECT_THROW(graph.addGroupEdge("watchmen", "Watchmen", watchmen, 1.0f),
                InvalidConnectionError);
@@ -229,7 +216,6 @@ TEST(MemoryGraphTest, AddGroupEdgeDuplicateThrows) {
   std::unordered_set<std::string> musketeers{"athos", "porthos", "aramis"};
   graph.addGroupEdge("musketeers", "The Three Musketeers", musketeers, 1.0f);
 
-  // Duplicate ID
   EXPECT_THROW(graph.addGroupEdge("musketeers", "The Three Musketeers",
                                   musketeers, 1.0f),
                DuplicateIdError);
@@ -285,15 +271,12 @@ TEST(MemoryGraphTest, RemoveGroupEdge) {
   std::unordered_set<std::string> group{"a", "b", "c"};
   graph.addGroupEdge("group1", "Test Group", group, 1.0f);
 
-  // Verify connections exist
   EXPECT_EQ(graph.getNeighbors("a").size(), 2);
   EXPECT_EQ(graph.getNeighbors("b").size(), 2);
   EXPECT_EQ(graph.getNeighbors("c").size(), 2);
 
-  // Remove the group edge
   graph.removeEdge("group1");
 
-  // Verify all connections removed
   EXPECT_FALSE(graph.hasEdge("group1"));
   EXPECT_EQ(graph.getNeighbors("a").size(), 0);
   EXPECT_EQ(graph.getNeighbors("b").size(), 0);
@@ -312,21 +295,18 @@ TEST(MemoryGraphTest, GetGroupEdges) {
   graph.addNode(c);
   graph.addNode(d);
 
-  // Add group edges
   std::unordered_set<std::string> group1{"a", "b", "c"};
   graph.addGroupEdge("group1", "Group 1", group1, 1.0f);
 
   std::unordered_set<std::string> group2{"c", "d"};
   graph.addGroupEdge("group2", "Group 2", group2, 1.0f);
 
-  // Add pairwise edge (should NOT be in group edges)
   SymmetricConnections pair{"a", "d"};
   Edge pairEdge("pair", "Pair", EdgeType::SYMMETRIC, pair, 1.0f);
   graph.addEdge(pairEdge);
 
   auto groupEdges = graph.getGroupEdges();
 
-  // Only group edges should be returned (2+ nodes)
   EXPECT_EQ(groupEdges.size(), 2);
 
   std::unordered_set<std::string> groupIds;
@@ -365,24 +345,17 @@ TEST(MemoryGraphTest, GetGroupMembersInvalidGroupThrows) {
   Node a("a", "Node A");
   graph.addNode(a);
 
-  // Non-existent group
   EXPECT_THROW(graph.getGroupMembers("nonexistent"), EdgeNotFoundError);
 
-  // Add pairwise edge (not a group)
-  SymmetricConnections pair{"a",
-                            "a"}; // Self-loop (invalid, but tests don't care)
-  // Actually, let's use a proper test:
   Node b("b", "Node B");
   graph.addNode(b);
   SymmetricConnections pair2{"a", "b"};
   Edge pairEdge("pair", "Pair", EdgeType::SYMMETRIC, pair2, 1.0f);
   graph.addEdge(pairEdge);
 
-  // Pairwise edge should NOT be considered a group
   EXPECT_THROW(graph.getGroupMembers("pair"), std::invalid_argument);
 }
 
-// Mixed Graph Tests (Group + Pairwise)
 TEST(MemoryGraphTest, MixedGroupAndPairwiseEdges) {
   MemoryGraph graph;
 
@@ -395,11 +368,9 @@ TEST(MemoryGraphTest, MixedGroupAndPairwiseEdges) {
   graph.addNode(c);
   graph.addNode(d);
 
-  // Group edge: a, b, c
   std::unordered_set<std::string> group{"a", "b", "c"};
   graph.addGroupEdge("group1", "Group 1", group, 1.0f);
 
-  // Pairwise edge: c -> d (asymmetric)
   AsymmetricConnections cd{"c", "d"};
   Edge pair("c_d", "c->d", EdgeType::ASYMMETRIC, cd, 1.0f);
   graph.addEdge(pair);
@@ -407,18 +378,16 @@ TEST(MemoryGraphTest, MixedGroupAndPairwiseEdges) {
   EXPECT_EQ(graph.getNeighbors("a").size(), 2);
   EXPECT_EQ(graph.getNeighbors("b").size(), 2);
   EXPECT_EQ(graph.getNeighbors("c").size(), 3);
-  EXPECT_EQ(graph.getNeighbors("d").size(), 0);
+  EXPECT_EQ(graph.getNeighbors("d").size(), 1);
+  EXPECT_EQ(graph.getNeighbors("d")[0].getId(), "c");
 
-  // Remove the group edge
   graph.removeEdge("group1");
 
-  // c should still have d connection
   EXPECT_EQ(graph.getNeighbors("c").size(), 1);
   EXPECT_EQ(graph.getNeighbors("a").size(), 0);
   EXPECT_EQ(graph.getNeighbors("b").size(), 0);
 }
 
-// Edge Case Tests for Group Edges
 TEST(MemoryGraphTest, GroupEdgeWithLargeNodeCount) {
   MemoryGraph graph;
   const int N = 100;
@@ -430,12 +399,9 @@ TEST(MemoryGraphTest, GroupEdgeWithLargeNodeCount) {
     graph.addNode(Node(id, "Label_" + std::to_string(i)));
   }
 
-  // Create a group with all 100 nodes
   EXPECT_NO_THROW(graph.addGroupEdge("big_group", "Big Group", nodes, 1.0f));
   EXPECT_TRUE(graph.hasEdge("big_group"));
 
-  // Each node should have 99 connections
-  const auto &firstNode = graph.getNode("node_0");
   EXPECT_EQ(graph.getNeighbors("node_0").size(), 99);
 }
 
@@ -453,26 +419,21 @@ TEST(MemoryGraphTest, GroupEdgeSerializationRoundTrip) {
   json metadata = {{"name", "Test Group"}, {"size", 3}};
   graph.addGroupEdge("group1", "Test Group", group, 0.8f, metadata);
 
-  // Serialize
   json graphJson = graph.toJson();
 
-  // Verify edge in JSON
   EXPECT_TRUE(graphJson["edges"].contains("group1"));
   EXPECT_EQ(graphJson["edges"]["group1"]["label"], "Test Group");
   EXPECT_NEAR(graphJson["edges"]["group1"]["weight"], 0.8, 1e-6);
   EXPECT_EQ(graphJson["edges"]["group1"]["connections"]["type"], "symmetric");
   EXPECT_EQ(graphJson["edges"]["group1"]["connections"]["nodes"].size(), 3);
 
-  // Deserialize
   MemoryGraph deserialized = MemoryGraph::fromJson(graphJson);
 
-  // Verify edge restored
   EXPECT_TRUE(deserialized.hasEdge("group1"));
   const Edge &restored = deserialized.getEdge("group1");
   EXPECT_EQ(restored.getLabel(), "Test Group");
   EXPECT_NEAR(restored.getWeight(), 0.8, 1e-6);
 
-  // Verify connections restored
   EXPECT_EQ(deserialized.getNeighbors("a").size(), 2);
   EXPECT_EQ(deserialized.getNeighbors("b").size(), 2);
   EXPECT_EQ(deserialized.getNeighbors("c").size(), 2);
@@ -505,10 +466,8 @@ TEST(MemoryGraphTest, RemoveEdge) {
   graph.removeEdge("luffy_zoro");
   EXPECT_FALSE(graph.hasEdge("luffy_zoro"));
 
-  // Check connections removed from nodes
-  const auto &luffyConnections = graph.getNode("luffy").getConnections();
-  EXPECT_FALSE(std::find(luffyConnections.begin(), luffyConnections.end(),
-                         "zoro") != luffyConnections.end());
+  // FIX #4: Check connections via getNeighbors instead of Node::getConnections
+  EXPECT_EQ(graph.getNeighbors("luffy").size(), 3);
 }
 
 TEST(MemoryGraphTest, RemoveNonExistentEdgeThrows) {
@@ -569,7 +528,8 @@ TEST(MemoryGraphTest, getNeighborsEmpty) {
   MemoryGraph graph = createTestGraph();
 
   std::vector<Node> neighbors = graph.getNeighbors("shanks");
-  EXPECT_EQ(neighbors.size(), 0);
+  EXPECT_EQ(neighbors.size(), 1);
+  EXPECT_EQ(neighbors[0].getId(), "luffy");
 }
 
 TEST(MemoryGraphTest, getNeighborsNonExistentNodeThrows) {
@@ -577,32 +537,42 @@ TEST(MemoryGraphTest, getNeighborsNonExistentNodeThrows) {
   EXPECT_THROW(graph.getNeighbors("imu"), NodeNotFoundError);
 }
 
-// Query Tests (BFS Traversal)
-TEST(MemoryGraphTest, QueryDepthO) {
+// Query Tests (BFS Traversal) - Updated for new rich return format
+TEST(MemoryGraphTest, QueryDepth0) {
   MemoryGraph graph = createTestGraph();
 
-  json result = graph.query("luffy", 0);
-  EXPECT_TRUE(result.contains("depth_0"));
-  EXPECT_EQ(result["depth_0"].size(), 1);
-  EXPECT_EQ(result["depth_0"][0], "luffy");
-  EXPECT_FALSE(result.contains("depth_1"));
+  json result = graph.query("luffy", 0, 0.0f);
+  EXPECT_TRUE(result.contains("nodes"));
+  EXPECT_TRUE(result.contains("edges"));
+  EXPECT_EQ(result["nodes"].size(), 1);
+  EXPECT_EQ(result["nodes"][0]["id"], "luffy");
+  EXPECT_EQ(result["nodes"][0]["depth"], 0);
+  EXPECT_TRUE(result["edges"].empty());
 }
 
 TEST(MemoryGraphTest, QueryDepth1) {
   MemoryGraph graph = createTestGraph();
 
-  json result = graph.query("luffy", 1);
-  EXPECT_TRUE(result.contains("depth_0"));
-  EXPECT_TRUE(result.contains("depth_1"));
-  EXPECT_EQ(result["depth_0"][0], "luffy");
-  EXPECT_EQ(result["depth_1"].size(), 4);
+  json result = graph.query("luffy", 1, 0.0f);
+  EXPECT_TRUE(result.contains("nodes"));
+  EXPECT_TRUE(result.contains("edges"));
 
-  // Verify all neighbors are present
-  std::unordered_set<std::string> neighbors;
-  for (const auto &id : result["depth_1"]) {
-    neighbors.insert(id.get<std::string>());
+  bool foundLuffy = false;
+  for (const auto &node : result["nodes"]) {
+    if (node["id"] == "luffy") {
+      EXPECT_EQ(node["depth"], 0);
+      foundLuffy = true;
+    }
   }
+  EXPECT_TRUE(foundLuffy);
 
+  std::unordered_set<std::string> neighbors;
+  for (const auto &node : result["nodes"]) {
+    if (node["depth"] == 1) {
+      neighbors.insert(node["id"].get<std::string>());
+    }
+  }
+  EXPECT_EQ(neighbors.size(), 4);
   EXPECT_TRUE(neighbors.count("zoro"));
   EXPECT_TRUE(neighbors.count("nami"));
   EXPECT_TRUE(neighbors.count("shanks"));
@@ -612,18 +582,16 @@ TEST(MemoryGraphTest, QueryDepth1) {
 TEST(MemoryGraphTest, QueryWithMinWeight) {
   MemoryGraph graph = createTestGraph();
 
-  // All edges have weight >= 0.95 except maybe some
   json result = graph.query("luffy", 1, 0.96f);
 
-  // Only edge with weight >= 0.96
-  // luffy_shanks has 0.95, so it should be excluded
-  EXPECT_EQ(result["depth_1"].size(), 3);
-
   std::unordered_set<std::string> neighbors;
-  for (const auto &id : result["depth_1"]) {
-    neighbors.insert(id.get<std::string>());
+  for (const auto &node : result["nodes"]) {
+    if (node["depth"] == 1) {
+      neighbors.insert(node["id"].get<std::string>());
+    }
   }
 
+  EXPECT_EQ(neighbors.size(), 3);
   EXPECT_TRUE(neighbors.count("zoro"));
   EXPECT_TRUE(neighbors.count("nami"));
   EXPECT_TRUE(neighbors.count("straw_hats"));
@@ -632,7 +600,7 @@ TEST(MemoryGraphTest, QueryWithMinWeight) {
 
 TEST(MemoryGraphTest, QueryNonExistentNodeThrows) {
   MemoryGraph graph;
-  EXPECT_THROW(graph.query("imu", 1), NodeNotFoundError);
+  EXPECT_THROW(graph.query("imu", 1, 0.0f), NodeNotFoundError);
 }
 
 // Serialization Tests
@@ -647,12 +615,10 @@ TEST(MemoryGraphTest, ToJson) {
   EXPECT_EQ(graphJson["nodes"].size(), 5);
   EXPECT_EQ(graphJson["edges"].size(), 5);
 
-  // Check a specific node
   EXPECT_TRUE(graphJson["nodes"].contains("luffy"));
   EXPECT_EQ(graphJson["nodes"]["luffy"]["label"], "Monkey D. Luffy");
   EXPECT_EQ(graphJson["nodes"]["luffy"]["metadata"]["bounty"], 3000000000);
 
-  // Check a specific edge
   EXPECT_TRUE(graphJson["edges"].contains("luffy_shanks"));
   EXPECT_EQ(graphJson["edges"]["luffy_shanks"]["label"], "inspired_by");
   EXPECT_NEAR(graphJson["edges"]["luffy_shanks"]["weight"], 0.95, 1e-6);
@@ -664,10 +630,7 @@ TEST(MemoryGraphTest, FromJson) {
 
   MemoryGraph deserialized = MemoryGraph::fromJson(graphJson);
 
-  // Check metadata
   EXPECT_EQ(deserialized.getMetadata()["name"], "Test Graph");
-
-  // Check nodes
   EXPECT_EQ(deserialized.getNodes().size(), 5);
   EXPECT_TRUE(deserialized.hasNode("luffy"));
   EXPECT_TRUE(deserialized.hasNode("zoro"));
@@ -675,17 +638,14 @@ TEST(MemoryGraphTest, FromJson) {
   EXPECT_TRUE(deserialized.hasNode("shanks"));
   EXPECT_TRUE(deserialized.hasNode("straw_hats"));
 
-  // Check node data
   const Node &luffy = deserialized.getNode("luffy");
   EXPECT_EQ(luffy.getLabel(), "Monkey D. Luffy");
   EXPECT_EQ(luffy.getMetadata()["bounty"], 3000000000);
 
-  // Check edges
   EXPECT_EQ(deserialized.getEdges().size(), 5);
   EXPECT_TRUE(deserialized.hasEdge("luffy_zoro"));
   EXPECT_TRUE(deserialized.hasEdge("luffy_shanks"));
 
-  // Check connections
   EXPECT_EQ(deserialized.getNeighbors("luffy").size(), 4);
 }
 
@@ -695,7 +655,6 @@ TEST(MemoryGraphTest, SerializationRoundTrip) {
   MemoryGraph deserialized = MemoryGraph::fromJson(serialized);
   json reserialized = deserialized.toJson();
 
-  // Compare JSON objects (they should be identical)
   EXPECT_EQ(serialized["metadata"], reserialized["metadata"]);
   EXPECT_EQ(serialized["nodes"].size(), reserialized["nodes"].size());
   EXPECT_EQ(serialized["edges"].size(), reserialized["edges"].size());
@@ -753,33 +712,33 @@ TEST(MemoryGraphTest, LargeNumberOfNodes) {
 TEST(MemoryGraphTest, QueryUsesCorrectEdgeWeights) {
   MemoryGraph graph = createTestGraph();
 
-  // Query with minWeight high enough to filter out low-weight edges
   json result = graph.query("luffy", 1, 0.96f);
 
-  // luffy_shanks has weight 0.95, so it should be filtered OUT
-  // Other connections have weight 1.0, so they should be present
   std::unordered_set<std::string> neighbors;
-  for (const auto &id : result["depth_1"]) {
-    neighbors.insert(id.get<std::string>());
+  for (const auto &node : result["nodes"]) {
+    if (node["depth"] == 1) {
+      neighbors.insert(node["id"].get<std::string>());
+    }
   }
 
-  EXPECT_TRUE(neighbors.count("zoro"));       // weight 1.0
-  EXPECT_TRUE(neighbors.count("nami"));       // weight 1.0
-  EXPECT_TRUE(neighbors.count("straw_hats")); // weight 1.0
-  EXPECT_FALSE(neighbors.count("shanks"));    // weight 0.95 - filtered out!
+  EXPECT_TRUE(neighbors.count("zoro"));
+  EXPECT_TRUE(neighbors.count("nami"));
+  EXPECT_TRUE(neighbors.count("straw_hats"));
+  EXPECT_FALSE(neighbors.count("shanks"));
 }
 
 TEST(MemoryGraphTest, QueryFindsAllNeighborsRegardlessOfOrder) {
   MemoryGraph graph = createTestGraph();
 
-  json result = graph.query("luffy", 1, 0.0f); // Include all weights
+  json result = graph.query("luffy", 1, 0.0f);
 
   std::unordered_set<std::string> neighbors;
-  for (const auto &id : result["depth_1"]) {
-    neighbors.insert(id.get<std::string>());
+  for (const auto &node : result["nodes"]) {
+    if (node["depth"] == 1) {
+      neighbors.insert(node["id"].get<std::string>());
+    }
   }
 
-  // All neighbors regardless of weight should be found
   EXPECT_EQ(neighbors.size(), 4);
   EXPECT_TRUE(neighbors.count("zoro"));
   EXPECT_TRUE(neighbors.count("nami"));
@@ -807,7 +766,7 @@ TEST(MemoryGraphTest, NodeNotFoundError) {
     graph.getNode("nonexistent");
     FAIL() << "Expected NodeNotFoundError";
   } catch (const NodeNotFoundError &e) {
-    EXPECT_STREQ(e.what(), "Node with ID 'nonexistent' not found.");
+    EXPECT_STREQ(e.what(), "Node with ID 'nonexistent' not found");
   }
 }
 
@@ -815,7 +774,6 @@ TEST(MemoryGraphTest, NodeNotFoundError) {
 TEST(MemoryGraphTest, ComplexGraphOperations) {
   MemoryGraph graph;
 
-  // Create a small networks
   Node geralt("geralt", "Geralt");
   Node vesemir("vesemir", "Vesemir");
   Node triss("triss", "Triss");
@@ -826,15 +784,13 @@ TEST(MemoryGraphTest, ComplexGraphOperations) {
   graph.addNode(triss);
   graph.addNode(yennefer);
 
-  // Add edges
   AsymmetricConnections vesemirGeralt{"vesemir", "geralt"};
   Edge edge1("vesemir_geralt", "mentored_by", EdgeType::ASYMMETRIC,
              vesemirGeralt, 1.0f);
   graph.addEdge(edge1);
 
   SymmetricConnections geraltTriss{"geralt", "triss"};
-  Edge edge2("geralt_triss", "lovers", EdgeType::SYMMETRIC, geraltTriss,
-             1.0f); // I like Triss, fight me!
+  Edge edge2("geralt_triss", "lovers", EdgeType::SYMMETRIC, geraltTriss, 1.0f);
   graph.addEdge(edge2);
 
   SymmetricConnections trissYennefer{"triss", "yennefer"};
@@ -842,21 +798,76 @@ TEST(MemoryGraphTest, ComplexGraphOperations) {
              0.5f);
   graph.addEdge(edge3);
 
-  // Query from Vesemir
-  json result = graph.query("vesemir", 2);
+  json result = graph.query("vesemir", 2, 0.0f);
 
-  EXPECT_EQ(result["depth_0"][0], "vesemir");
-  EXPECT_EQ(result["depth_1"].size(), 1);
-  EXPECT_EQ(result["depth_1"][0], "geralt");
-  EXPECT_EQ(result["depth_2"].size(), 1);
-  EXPECT_EQ(result["depth_2"][0], "triss");
+  std::unordered_map<std::string, int> nodeDepths;
+  for (const auto &node : result["nodes"]) {
+    nodeDepths[node["id"].get<std::string>()] = node["depth"].get<int>();
+  }
 
-  // Remove Gerlat and verify
+  EXPECT_EQ(nodeDepths["vesemir"], 0);
+  EXPECT_EQ(nodeDepths["geralt"], 1);
+  EXPECT_EQ(nodeDepths["triss"], 2);
+  EXPECT_EQ(nodeDepths.count("yennefer"), 0); // Depth 3, excluded
+
   graph.removeNode("geralt");
   EXPECT_FALSE(graph.hasNode("geralt"));
   EXPECT_FALSE(graph.hasEdge("geralt_triss"));
   EXPECT_FALSE(graph.hasEdge("vesemir_geralt"));
 
-  // Vesemir should now have no connections
   EXPECT_EQ(graph.getNeighbors("vesemir").size(), 0);
+}
+
+// Hebbian Integration Tests
+TEST(MemoryGraphTest, HebbianIntegrationBasic) {
+  MemoryGraph graph;
+  graph.setMode(GraphMode::SYMBOLIC);
+
+  Node a("a", "Node A", {{"confidence", 0.9}});
+  Node b("b", "Node B", {{"confidence", 0.9}});
+  graph.addNode(a);
+  graph.addNode(b);
+
+  graph.attachHebbian(
+      HebbianConfig{.learning_rate = 0.2f, .wiring_threshold = 1});
+
+  graph.learn({"a", "b"});
+
+  EXPECT_TRUE(graph.hasEdge("hebb_a|b"));
+  EXPECT_GT(graph.getEdge("hebb_a|b").getWeight(), 0.0f);
+}
+
+TEST(MemoryGraphTest, HebbianModeEnforcement) {
+  MemoryGraph graph;
+  graph.setMode(GraphMode::KNOWLEDGE);
+
+  Node a("a", "Node A");
+  graph.addNode(a);
+
+  EXPECT_THROW(graph.attachHebbian(), ModeError);
+}
+
+TEST(MemoryGraphTest, HebbianSpreadingActivation) {
+  MemoryGraph graph;
+  graph.setMode(GraphMode::SYMBOLIC);
+
+  Node a("a", "Node A");
+  Node b("b", "Node B");
+  Node c("c", "Node C");
+  graph.addNode(a);
+  graph.addNode(b);
+  graph.addNode(c);
+
+  graph.addEdge(Edge("e1", "relates", EdgeType::ASYMMETRIC,
+                     AsymmetricConnections("a", "b"), 0.9f));
+  graph.addEdge(Edge("e2", "relates", EdgeType::ASYMMETRIC,
+                     AsymmetricConnections("b", "c"), 0.5f));
+
+  graph.attachHebbian(HebbianConfig{.spreading_gamma = 0.5f});
+
+  auto result = graph.activate("a", 2, 2);
+
+  EXPECT_EQ(result.frontier.size(), 2);
+  EXPECT_EQ(result.frontier[0].first, "b");
+  EXPECT_GT(result.frontier[0].second, result.frontier[1].second);
 }
