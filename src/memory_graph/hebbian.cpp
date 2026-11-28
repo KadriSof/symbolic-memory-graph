@@ -2,12 +2,16 @@
 #include "memory_graph/edge.hpp"
 #include "memory_graph/exceptions.hpp"
 #include "memory_graph/memory_graph.hpp"
+#include "memory_graph/node.hpp"
 #include "nlohmann/json.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -20,6 +24,28 @@ HebbianEngine::HebbianEngine(MemoryGraph &graph, HebbianConfig config)
 
 const HebbianConfig &HebbianEngine::config() const { return config_; }
 void HebbianEngine::setConfig(const HebbianConfig &config) { config_ = config; }
+
+// Helpers
+std::string HebbianEngine::makePairKey(const std::string &a,
+                                       const std::string &b) const {
+  if (a < b)
+    return a + "|" + b;
+  return b + "|" + a;
+}
+
+float HebbianEngine::readConfidence(const Node &node) const {
+  const auto &meta = node.getMetadata();
+  if (meta.contains("confidence")) {
+    return meta["confidence"].get<float>();
+  }
+  return 0.5f;
+}
+
+void HebbianEngine::ensureModeAllowed(const std::string &operation) const {
+  if (graph_.getMode() == GraphMode::KNOWLEDGE) {
+    throw ModeError(operation, "KNOWLEDGE");
+  }
+}
 
 // LAW 1 - FIRE
 void HebbianEngine::fire(const std::string &nodeId, float level) {
@@ -54,10 +80,16 @@ void HebbianEngine::fireAll(const std::vector<std::string> &nodeIds,
 // LAW 2 - WIRE (potentiation)
 void HebbianEngine::ensureOrCreateEdge(const std::string &a,
                                        const std::string &b) {
-  std::string edgeId = "hebb_" + a + "_" + b;
+  std::string key = makePairKey(a, b);
+  std::string edgeId = "hebb_" + key;
+
+  if (graph_.hasEdge(edgeId))
+    return;
+
   AsymmetricConnections conn(a, b);
-  nlohmann::json meta = {
-      {"relation", "hebbian", {"last_potentiated_tick", "tick"}}};
+  nlohmann::json meta = {{"relation", "hebbian"},
+                         {"last_potentiated_tick", tick_}};
+
   Edge edge(edgeId, "HEBBIAN", EdgeType::ASYMMETRIC, conn,
             config_.initial_edge_weight, meta);
   graph_.addEdge(edge);
@@ -212,4 +244,70 @@ void HebbianEngine::normalizeHub(const std::string &nodeId) {
     graph_.removeEdge(edge_weights[i].first);
   }
 }
+
+// Spreading Activation
+ActivationResult HebbianEngine::activate(const std::vector<std::string> &seeds,
+                                         size_t k, int maxDepth) {
+  ensureModeAllowed("activate");
+
+  ActivationResult result;
+  result.tick = tick_;
+
+  if (seeds.empty())
+    return result;
+
+  // Accumulated activation per node
+  std::unordered_map<std::string, float> accumulated;
+  std::unordered_set<std::string> seed_set(seeds.begin(), seeds.end());
+
+  // Initialize seeds
+  std::unordered_map<std::string, float> current_frontier;
+  for (const auto &seed : seeds) {
+    if (!graph_.hasNode(seed)) {
+      throw NodeNotFoundError(seed);
+    }
+    current_frontier[seed] = 1.0f;
+  }
+
+  const auto &adjList = graph_.getAdjacencyList();
+
+  // Spread activation across hops
+  for (int hop = 1; hop <= maxDepth; ++hop) {
+    std::unordered_map<std::string, float> next_frontier;
+    float gamma_hop = std::pow(config_.spreading_gamma, hop);
+
+    for (const auto &[nodeId, act] : current_frontier) {
+      auto it = adjList.find(nodeId);
+      if (it == adjList.end())
+        continue;
+
+      for (const auto &entry : it->second) {
+        if (seed_set.count(entry.neighbor_id))
+          continue;
+
+        float edge_w = getEffectiveWeight(entry.edge_id);
+        float contribution = act * edge_w * gamma_hop;
+        next_frontier[entry.neighbor_id] += contribution;
+        accumulated[entry.neighbor_id] += contribution;
+      }
+    }
+
+    current_frontier = std::move(next_frontier);
+  }
+
+  // Sort by accumulated activation top-k
+  std::vector<std::pair<std::string, float>> ranked(accumulated.begin(),
+                                                    accumulated.end());
+  std::sort(ranked.begin(), ranked.end(),
+            [](const auto &a, const auto &b) { return a.second > b.second; });
+
+  size_t count = std::min(k, ranked.size());
+  result.frontier.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    result.frontier.push_back(ranked[i]);
+  }
+
+  return result;
+}
+
 } // namespace memory_graph

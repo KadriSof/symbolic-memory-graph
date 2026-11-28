@@ -118,7 +118,7 @@ public:
 
   // Inspection
   float getActivation(const std::string &nodeId) const;
-  const std::unordered_map<std::string, float> &getActivation() const;
+  const std::unordered_map<std::string, float> &getActivations() const;
   uint32_t getCoactivationCount(const std::string &a,
                                 const std::string &b) const;
   uint32_t getTick() const;
