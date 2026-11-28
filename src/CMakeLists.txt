@@ -3,6 +3,7 @@ add_library(memory_graph STATIC
   memory_graph/node.cpp
   memory_graph/edge.cpp
   memory_graph/memory_graph.cpp
+  memory_graph/hebbian.cpp
   memory_graph/exceptions.cpp
   memory_graph/utils/serialization.cpp
   memory_graph/utils/traversal.cpp
