@@ -21,6 +21,9 @@ struct AdjacencyEntry {
   std::string edge_id;
 };
 
+class HebbianEngine;
+class HebbianConfig;
+
 class MemoryGraph {
 public:
   explicit MemoryGraph(
@@ -77,6 +80,7 @@ public:
   // Hebbian integration (SYMBOLIC MODE ONLY)
   void attachHebbian(const HebbianConfig &config = HebbianConfig{});
   void detachHebbian();
+  bool hasHebbian() const;
   HebbianEngine &hebbian();
   const HebbianEngine &hebbian() const;
 
@@ -85,8 +89,12 @@ public:
 
   // Convenience: spreading-activation query (Falls back to BFS in KNOWLEDGE
   // MODE)
-  nlohmann::json activate(const std::string &seed, size_t k = 10,
-                          int maxDepth = 3);
+
+  ActivationResult activate(const std::string &seed, size_t k = 10,
+                            int maxDepth = 3);
+
+  // (for testing)
+  bool isAdjacencyCacheValid() const;
 
 private:
   std::unordered_map<std::string, Node> nodes_;

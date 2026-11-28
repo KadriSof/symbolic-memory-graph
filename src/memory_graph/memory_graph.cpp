@@ -1,11 +1,14 @@
 #include "memory_graph/memory_graph.hpp"
 #include "memory_graph/edge.hpp"
 #include "memory_graph/exceptions.hpp"
+#include "memory_graph/hebbian.hpp"
 #include "memory_graph/node.hpp"
+#include "memory_graph/utils/traversal.hpp"
 #include "nlohmann/json.hpp"
 #include <cstddef>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <queue>
 #include <stdexcept>
@@ -492,5 +495,55 @@ void MemoryGraph::updateMetadata(const std::string &key,
                                  const nlohmann::json &value) {
   metadata_[key] = value;
 }
+
+void MemoryGraph::attachHebbian(const HebbianConfig &config) {
+  if (mode_ == GraphMode::KNOWLEDGE) {
+    throw ModeError("attachHebbian", "KNOWLEDGE");
+  }
+  hebbian_ = std::make_unique<HebbianEngine>(*this, config);
+}
+
+void MemoryGraph::detachHebbian() { hebbian_.reset(); }
+
+bool MemoryGraph::hasHebbian() const { return hebbian_ != nullptr; }
+
+HebbianEngine &MemoryGraph::hebbian() {
+  if (!hebbian_) {
+    throw std::runtime_error(
+        "HebbianEngine not attached. Call attachHebbian() first.");
+  }
+
+  return *hebbian_;
+}
+
+void MemoryGraph::learn(const std::vector<std::string> &firedNodes) {
+  if (!hebbian_) {
+    throw std::runtime_error(
+        "HebbianEngine not attached. Call attachHebbian() first.");
+  }
+  hebbian_->fireAll(firedNodes);
+  hebbian_->potentiate();
+}
+
+ActivationResult MemoryGraph::activate(const std::string &seed, size_t k,
+                                       int maxDepth) {
+  if (hebbian_) {
+    return hebbian_->activate({seed}, k, maxDepth);
+  }
+
+  // Fallback to BFS for KNOWLEDGE MODE
+  ActivationResult result;
+  result.tick = 0;
+  auto nodeIds = utils::bfs(*this, seed, maxDepth);
+  for (const auto &id : nodeIds) {
+    if (id != seed) {
+      result.frontier.emplace_back(id, 1.0f);
+    }
+  }
+
+  return result;
+}
+
+bool MemoryGraph::isAdjacencyCacheValid() const { return !adjacencyDirty_; }
 
 } // namespace memory_graph
