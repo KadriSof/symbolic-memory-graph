@@ -35,7 +35,7 @@ public:
    * @param metadata Additional context (e.g., timestamp, location).
    */
   Edge(const std::string &id, const std::string &label, EdgeType type,
-       const Connections &connections, float weight,
+       const Connections &connections, float weight = 1.0f,
        const nlohmann::json &metadata = nlohmann::json::object(),
        bool isGroupEdge = false);
 
